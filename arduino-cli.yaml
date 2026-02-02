@@ -1,0 +1,6 @@
+# Arduino CLI configuration for this project.
+# Default board for compile commands: arduino:avr:uno
+board_manager:
+  additional_urls: []
+sketch:
+  always_export_binaries: false
