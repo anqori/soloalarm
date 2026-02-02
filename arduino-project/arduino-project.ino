@@ -12,6 +12,9 @@ static const uint8_t RELAY2_PIN = 9;     // Keep channel 2 OFF
 static const uint8_t SPEAKER_PIN = 6;    // Grove Speaker on D6/D7 port (SIG1, PWM)
 static const uint8_t ROTARY_PIN = A0;    // Grove Rotary Sensor on A0/A1 port (SIG1)
 
+// Button polarity: Grove Button modules are typically active HIGH.
+static const bool BUTTON_ACTIVE_LOW = false;
+
 // Relay polarity: set true if your module is active LOW
 static const bool RELAY_ACTIVE_LOW = false;
 
@@ -23,7 +26,7 @@ static const uint8_t OLED_HEIGHT = 64;
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
 // Config limits
-static const uint8_t INTERVAL_MIN_MIN = 5;
+static const uint8_t INTERVAL_MIN_MIN = 1;
 static const uint8_t INTERVAL_MIN_MAX = 30;
 static const uint8_t WARN_SEC_MIN = 0;
 static const uint8_t WARN_SEC_MAX = 60;
@@ -38,8 +41,13 @@ static const unsigned long BOOT_HOLD_WARN_MS = 2000;
 static const unsigned long DISPLAY_PERIOD_MS = 200;
 
 // Beep/Alarm settings
-static const uint16_t SPEAKER_FREQ_HZ = 3000;
+static const uint16_t WARN_SPEAKER_FREQ_HZ = 2400;
+static const unsigned long WARN_PERIOD_START_MS = 700;
+static const unsigned long WARN_PERIOD_END_MS = 120;
+static const uint8_t WARN_DUTY_START_PCT = 35;
+static const uint8_t WARN_DUTY_END_PCT = 92;
 static const unsigned long ALARM_RAMP_MS = 30000;
+static const unsigned long ALARM_MAX_MS = 300000;
 
 struct Config {
   uint8_t magic;
@@ -141,11 +149,16 @@ bool isArmSwitchOn() {
   return digitalRead(ARM_PIN) == LOW;
 }
 
+bool isButtonPressed() {
+  bool pin_low = (digitalRead(BUTTON_PIN) == LOW);
+  return BUTTON_ACTIVE_LOW ? pin_low : !pin_low;
+}
+
 void updateButton(unsigned long now) {
   button.pressed = false;
   button.released = false;
 
-  bool raw = (digitalRead(BUTTON_PIN) == LOW);
+  bool raw = isButtonPressed();
   if (raw != button.last_read) {
     button.last_read = raw;
     button.last_change_ms = now;
@@ -282,13 +295,18 @@ void updateWarningSpeaker(unsigned long now) {
     elapsed = warn_window_ms;
   }
 
-  unsigned long period = 1000 - (elapsed * 800UL) / warn_window_ms; // 1000 -> 200 ms
-  unsigned long on_time = 60 + (elapsed * 120UL) / warn_window_ms;  // 60 -> 180 ms
+  unsigned long period_span = WARN_PERIOD_START_MS - WARN_PERIOD_END_MS;
+  unsigned long period = WARN_PERIOD_START_MS - (elapsed * period_span) / warn_window_ms;
+  uint8_t duty = WARN_DUTY_START_PCT + (uint8_t)((elapsed * (WARN_DUTY_END_PCT - WARN_DUTY_START_PCT)) / warn_window_ms);
+  unsigned long on_time = (period * duty) / 100UL;
+  if (on_time >= period && period > 5) {
+    on_time = period - 5;
+  }
 
   if (now - speaker_cycle_start_ms >= period) {
     speaker_cycle_start_ms = now;
     speaker_off_ms = now + on_time;
-    tone(SPEAKER_PIN, SPEAKER_FREQ_HZ);
+    tone(SPEAKER_PIN, WARN_SPEAKER_FREQ_HZ);
     speaker_on = true;
   }
 
@@ -300,6 +318,13 @@ void updateWarningSpeaker(unsigned long now) {
 
 void updateAlarmRelay(unsigned long now) {
   unsigned long elapsed = now - alarm_start_ms;
+  if (elapsed >= ALARM_MAX_MS) {
+    if (relay_on) {
+      setRelay(false);
+    }
+    return;
+  }
+
   if (elapsed >= ALARM_RAMP_MS) {
     if (!relay_on) {
       setRelay(true);
@@ -396,8 +421,10 @@ void drawDisplay(unsigned long now) {
       display.setCursor(0, 24);
       display.print("TIME UP");
       display.setTextSize(1);
+      display.setCursor(0, 48);
+      display.print("Tap: restart");
       display.setCursor(0, 56);
-      display.print("Switch off to stop");
+      display.print("Switch: disarm");
       break;
   }
 
@@ -405,7 +432,7 @@ void drawDisplay(unsigned long now) {
 }
 
 void setup() {
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, BUTTON_ACTIVE_LOW ? INPUT_PULLUP : INPUT);
   pinMode(ARM_PIN, INPUT_PULLUP);
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(RELAY2_PIN, OUTPUT);
@@ -422,15 +449,17 @@ void setup() {
     display.display();
   }
 
+  bool held_for_boot_window = isButtonPressed();
   unsigned long boot_start = millis();
-  while (millis() - boot_start < BOOT_HOLD_WARN_MS) {
-    if (digitalRead(BUTTON_PIN) == HIGH) {
+  while (held_for_boot_window && (millis() - boot_start < BOOT_HOLD_WARN_MS)) {
+    if (!isButtonPressed()) {
+      held_for_boot_window = false;
       break;
     }
     delay(10);
   }
 
-  if (digitalRead(BUTTON_PIN) == LOW) {
+  if (held_for_boot_window) {
     state = STATE_SET_WARN;
     startAdjust();
   } else {
@@ -491,6 +520,10 @@ void loop() {
     case STATE_ALARM: {
       if (!arm_on) {
         enterDisarmed();
+        break;
+      }
+      if (button.pressed) {
+        enterArmed(now);
         break;
       }
       updateAlarmRelay(now);

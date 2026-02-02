@@ -46,11 +46,13 @@ Siren (12V load):
 
 If your relay module is active-low, set `RELAY_ACTIVE_LOW = true` in
 `arduino-project/arduino-project.ino`.
+If your button logic is inverted, toggle `BUTTON_ACTIVE_LOW` in
+`arduino-project/arduino-project.ino`.
 
 ## UI / Behavior
 
 - **Disarmed**: shows interval + warn time.
-- **Set interval**: turn the rotary knob (maps to 5..30 minutes).
+- **Set interval**: turn the rotary knob (maps to 1..30 minutes).
 - **Set warn time**: hold the button at boot for ~2 seconds.
   - Seconds scroll 0..60 with acceleration.
   - Release to save.
@@ -59,7 +61,8 @@ If your relay module is active-low, set `RELAY_ACTIVE_LOW = true` in
 
 Warning + alarm:
 - Warning phase: quiet speaker beeps increase in frequency as time runs out.
-- Alarm phase: 12V siren pulses faster for ~30s, then stays on.
+- Alarm phase: 12V siren pulses faster for ~30s, then stays on continuously up to 5 minutes total.
+- In alarm, tap button to acknowledge and start a new full countdown.
 
 ## Build
 
@@ -94,4 +97,7 @@ make monitor PORT=/dev/ttyACM0 BAUD=115200
 - The timer stores warn time in EEPROM so settings persist.
 - Interval comes from the rotary sensor position.
 - Grove Relay 2CH uses digital SIG1/SIG2 (not I2C). Channel 2 is held OFF.
-- If you use an ATmega328PB board (e.g., ARD ONE C-MC), try `arduino:avr:uno` first. If upload fails, switch to the correct board core for 328PB.
+- Warning loudness can be tuned in `arduino-project/arduino-project.ino` via
+  `WARN_SPEAKER_FREQ_HZ`, `WARN_PERIOD_*`, and `WARN_DUTY_*`.
+- Default build target is `MiniCore:avr:328` with `variant=modelPB` for ATmega328PB boards (e.g., ARD ONE C-MC).
+- For ATmega328P boards, override with `make build BOARD_OPTIONS=variant=modelP` (and same for `make upload`).

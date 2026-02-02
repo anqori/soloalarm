@@ -1,0 +1,3 @@
+trimesh
+shapely
+mapbox_earcut

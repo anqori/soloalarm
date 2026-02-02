@@ -1,6 +1,7 @@
 # Arduino CLI configuration for this project.
 # Default board for compile commands: arduino:avr:uno
 board_manager:
-  additional_urls: []
+  additional_urls:
+    - https://mcudude.github.io/MiniCore/package_MCUdude_MiniCore_index.json
 sketch:
   always_export_binaries: false
