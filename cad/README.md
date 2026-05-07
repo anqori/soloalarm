@@ -1,4 +1,9 @@
-# CAD: Enclosure Halves
+# CAD: Legacy Arduino Enclosure Halves
+
+These files describe the previous Arduino Uno prototype enclosure. They are
+kept as historical reference only. The current M5Stack Tough plan uses the
+standard Tough enclosure plus an external IP-rated junction box for relay,
+fuses, and load wiring.
 
 This folder generates two STL enclosure halves for the sail timer build:
 

@@ -1,14 +1,14 @@
 ARDUINO_CLI ?= arduino-cli
 CLI_CONFIG ?= arduino-cli.yaml
 SKETCH_DIR ?= arduino-project
-# Default MiniCore target; override FQBN for specific MCU variants/options.
-FQBN ?= MiniCore:avr:328
-# Default to ATmega328PB variant (ARD ONE C-MC). Override as needed.
-BOARD_OPTIONS ?= variant=modelPB
+# Default M5Stack Tough target.
+FQBN ?= m5stack:esp32:m5stack_tough
+BOARD_OPTIONS ?=
 BUILD_DIR ?= build
 PORT ?= $(shell $(ARDUINO_CLI) board list | awk 'NR==2 {print $$1}')
-BAUD ?= 9600
-LIBS ?= "Adafruit SSD1306" "Adafruit GFX Library"
+BAUD ?= 115200
+LIBS ?= M5Unified M5GFX
+CORE ?= m5stack:esp32
 
 .PHONY: help list deps build upload monitor clean check-port
 
@@ -20,6 +20,8 @@ list:
 	$(ARDUINO_CLI) board list --config-file $(CLI_CONFIG)
 
 deps:
+	$(ARDUINO_CLI) core update-index --config-file $(CLI_CONFIG)
+	$(ARDUINO_CLI) core install $(CORE) --config-file $(CLI_CONFIG)
 	$(ARDUINO_CLI) lib install $(LIBS)
 
 build:

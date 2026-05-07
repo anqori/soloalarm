@@ -1,7 +1,7 @@
 # Arduino CLI configuration for this project.
-# Default board for compile commands: arduino:avr:uno
+# Board/package config for the M5Stack Tough build.
 board_manager:
   additional_urls:
-    - https://mcudude.github.io/MiniCore/package_MCUdude_MiniCore_index.json
+    - https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
 sketch:
   always_export_binaries: false

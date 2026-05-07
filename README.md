@@ -1,103 +1,170 @@
-# Solo Sailing Timer (Arduino Uno R3)
+# Solo Sailing Timer (M5Stack Tough)
 
-A minimal-hardware countdown timer for solo sailing:
-- Rotary knob for interval setting
-- One button for reset
-- One toggle switch to arm/disarm
-- Quiet warning speaker
-- Loud 12V siren via relay at time=0
+A touchscreen countdown timer for solo sailing, built around an exposed
+M5Stack Tough and an IP-rated junction box for the high-current wiring.
 
-## Hardware (no soldering)
+## Hardware
 
-Recommended pluggable parts:
-- Arduino Uno R3
-- Grove Base Shield V2 (part 103030000)
-- Grove OLED 0.96" (SSD1306/SSD1308, I2C)
-- Grove Button (momentary)
-- Grove Switch (toggle)
-- Grove Speaker (warning)
-- Grove Rotary Sensor (interval knob)
-- Grove Relay 2-Channel (part 103020132) for 12V siren
-- 12V active siren (loud alarm)
-- 12V -> 5V buck module (LM2596 type with screw terminals)
-- Grove 4-pin cables
+Recommended parts:
 
-## Wiring (pin map)
+- M5Stack Tough
+- M5Stack Unit 2Relay
+- IP-rated junction box for relay, fuses, and terminals
+- 12V active siren for the countdown alarm
+- 12V horn for fog signals
+- 12V supply
+- 6-core cable between junction box and Tough
+- Fuses for electronics, siren, and horn branches
+- Cable glands, ferrules, and strain relief
 
-Power:
-- 12V input -> buck module -> 5V
-- Buck 5V -> Arduino 5V pin
-- Buck GND -> Arduino GND
-- All grounds shared (Arduino, relay module, speaker, siren)
-- Set the Base Shield power switch to 5V
+The Tough is the user interface and warning speaker. The relay, siren, horn,
+fuses, and power distribution live in the junction box.
 
-Grove ports (Base Shield V2):
-- D2/D3 port: Grove Button (uses D2)
-- D4/D5 port: Grove Switch (uses D4)
-- D6/D7 port: Grove Speaker (uses D6, PWM)
-- D8/D9 port: Grove Relay 2CH (uses D8; D9 kept off)
-- A0/A1 port: Grove Rotary Sensor (uses A0)
-- I2C port: Grove OLED
+## Wiring
 
-Siren (12V load):
-- 12V + -> relay COM
-- relay NO -> siren +
-- siren - -> 12V GND
+The 12V supply enters the junction box first.
 
-If your relay module is active-low, set `RELAY_ACTIVE_LOW = true` in
-`arduino-project/arduino-project.ino`.
-If your button logic is inverted, toggle `BUTTON_ACTIVE_LOW` in
-`arduino-project/arduino-project.ino`.
+Cable from junction box to M5Stack Tough:
+
+- `+12V`: fused Tough power input
+- `GND`: Tough power ground
+- `Grove GND`: Unit 2Relay control ground
+- `Grove 5V`: Unit 2Relay logic power from the Tough Grove port
+- `Grove SIG1`: relay channel signal
+- `Grove SIG2`: relay channel signal
+
+`GND` and `Grove GND` are electrically common, but keeping both conductors in
+the cable makes the power and Grove pinout explicit.
+
+Unit 2Relay connection:
+
+- Tough Port A `G32` -> Unit 2Relay CH2 -> fog horn
+- Tough Port A `G33` -> Unit 2Relay CH1 -> alarm siren
+
+Do not feed 12V into Grove `5V`. The Grove `5V` conductor is supplied by the
+Tough Grove port only.
+
+Load wiring:
+
+```text
+12V supply
+  -> electronics fuse -> Tough power pair
+  -> siren fuse      -> relay CH1 COM
+  -> horn fuse       -> relay CH2 COM
+
+relay CH1 NO -> siren +
+relay CH2 NO -> horn +
+siren - / horn - -> 12V GND
+```
+
+If the horn current or inrush is too high for the Unit 2Relay, use CH2 to
+drive an external automotive or marine relay coil, and let that relay switch
+the horn power.
 
 ## UI / Behavior
 
-- **Disarmed**: shows interval + warn time.
-- **Set interval**: turn the rotary knob (maps to 1..30 minutes).
-- **Set warn time**: hold the button at boot for ~2 seconds.
-  - Seconds scroll 0..60 with acceleration.
-  - Release to save.
-- **Arm**: flip the toggle switch ON.
-- **Reset while armed**: tap button to reset countdown to full interval.
+The Tough has no normal programmable front-panel app buttons. The firmware uses
+the touchscreen only.
+
+The visual style is inspired by marine plotter/instrument HMIs: dark
+high-contrast panels, large numeric readouts, rectangular controls, red header
+accents, and amber active/hold states.
+
+The app has two operating modes: **Timer** and **Signals**. Switch between them
+by swiping horizontally:
+
+- Swipe left from Timer: Signals
+- Swipe right from Signals: Timer
+- The header shows page dots and a side chevron to make the swipe direction visible.
+- The small `*` button in the header opens settings for the current mode.
+
+Timer screen:
+
+- Shows disarmed, armed, warning, or alarm state.
+- Shows interval or remaining time.
+- Hold **Arm** to start the countdown.
+- **Reset** while armed/warning restarts the countdown.
+- **Ack** in alarm stops the siren and starts a new countdown.
+- During warning or alarm, touching anywhere resets/restarts the countdown.
+- Hold **Disarm** to return to disarmed.
+
+Timer settings:
+
+- Open from the Timer screen header.
+- `Interval`: 1..30 minutes
+- `Warning`: 0..60 seconds
+- **Done** returns to Timer.
+
+Signals settings:
+
+- Open from the Signals screen header.
+- `Underway interval`: 30s, 60s, or 120s between automatic signal groups
+- Applies to `Sailing` and `Power`
+- `Stopped` remains 120s
+- **Done** returns to Signals.
+- Settings are stored in ESP32 preferences and survive restart.
+
+Signals screen:
+
+- Hold **Horn** to sound the horn manually.
+- Under **Fog / Auto**, hold a mode button to start automatic fog signals.
+- Hold **Off** to stop automatic fog signals.
+- Hold progress is shown in the header as a full-width `HOLD` bar so it stays visible under your finger.
+- The active mode button is highlighted.
+- Hold another mode to switch.
+- Modes:
+  - `Sailing`: one prolonged blast + two short blasts every configured underway interval
+  - `Power`: one prolonged blast every configured underway interval
+  - `Stopped`: two prolonged blasts every 120s
+
+Automatic fog output pauses while the countdown alarm is active. The skipper is
+responsible for choosing the legally correct fog signal for the situation.
+
+Output indicators:
+
+- Lower-right `A`: alarm siren relay is active.
+- Lower-right `H`: horn relay is active.
+- Filled/bright means the output should currently be heard; dark outline means off.
 
 Warning + alarm:
-- Warning phase: quiet speaker beeps increase in frequency as time runs out.
-- Alarm phase: 12V siren pulses faster for ~30s, then stays on continuously up to 5 minutes total.
-- In alarm, tap button to acknowledge and start a new full countdown.
+
+- Warning phase: built-in Tough speaker beeps increase in frequency as time
+  runs out.
+- Alarm phase: siren pulses faster for ~30s, then stays on continuously up to
+  5 minutes total.
+- After 5 minutes the siren relay turns off automatically.
 
 ## Build
 
-Install required libraries:
+Install the M5Stack board package and libraries:
 
-```
+```bash
 make deps
 ```
 
 Compile:
 
-```
+```bash
 make build
 ```
 
-Upload (example port):
+Upload:
 
-```
-make upload PORT=/dev/ttyACM0
+```bash
+make upload PORT=/dev/ttyUSB0
 ```
 
-Monitor (example):
+Monitor:
 
-```
-make monitor PORT=/dev/ttyACM0 BAUD=115200
+```bash
+make monitor PORT=/dev/ttyUSB0
 ```
 
 ## Notes
 
-- The warning speaker is intentionally quiet. The siren is only used at time=0.
-- Use a buck converter for 12V -> 5V to keep the Arduino cool.
-- The timer stores warn time in EEPROM so settings persist.
-- Interval comes from the rotary sensor position.
-- Grove Relay 2CH uses digital SIG1/SIG2 (not I2C). Channel 2 is held OFF.
-- Warning loudness can be tuned in `arduino-project/arduino-project.ino` via
-  `WARN_SPEAKER_FREQ_HZ`, `WARN_PERIOD_*`, and `WARN_DUTY_*`.
-- Default build target is `MiniCore:avr:328` with `variant=modelPB` for ATmega328PB boards (e.g., ARD ONE C-MC).
-- For ATmega328P boards, override with `make build BOARD_OPTIONS=variant=modelP` (and same for `make upload`).
+- Default build target is `m5stack:esp32:m5stack_tough`.
+- The code uses M5Unified/M5GFX for display, touch, and speaker support.
+- Relay outputs default to active-high. If your relay board is active-low, set
+  `RELAY_ACTIVE_LOW = true` in `arduino-project/arduino-project.ino`.
+- The old CAD enclosure files are for the previous Arduino Uno prototype and
+  are not needed for the Tough + junction box build.

@@ -1,44 +1,31 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <EEPROM.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <M5Unified.h>
+#include <Preferences.h>
 
-// Hardware pins (Arduino Uno R3 + Grove Base Shield V2)
-static const uint8_t BUTTON_PIN = 2;     // Grove Button on D2/D3 port (SIG1)
-static const uint8_t ARM_PIN = 4;        // Grove Switch on D4/D5 port (SIG1)
-static const uint8_t RELAY_PIN = 8;      // Grove Relay 2CH on D8/D9 port (SIG1)
-static const uint8_t RELAY2_PIN = 9;     // Keep channel 2 OFF
-static const uint8_t SPEAKER_PIN = 6;    // Grove Speaker on D6/D7 port (SIG1, PWM)
-static const uint8_t ROTARY_PIN = A0;    // Grove Rotary Sensor on A0/A1 port (SIG1)
+// M5Stack Tough + Unit 2Relay on Port A.
+// Port A pins on Tough are G32/G33. Unit 2Relay uses both signal lines.
+static const uint8_t FOG_RELAY_PIN = 32;    // Unit 2Relay CH2: fog horn
+static const uint8_t ALARM_RELAY_PIN = 33;  // Unit 2Relay CH1: alarm siren
 
-// Button polarity: Grove Button modules are typically active HIGH.
-static const bool BUTTON_ACTIVE_LOW = false;
-
-// Relay polarity: set true if your module is active LOW
 static const bool RELAY_ACTIVE_LOW = false;
-
-// OLED display (SSD1306 128x64 I2C)
-static const uint8_t OLED_ADDR = 0x3C;
-static const int OLED_RESET = -1;
-static const uint8_t OLED_WIDTH = 128;
-static const uint8_t OLED_HEIGHT = 64;
-Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
 // Config limits
 static const uint8_t INTERVAL_MIN_MIN = 1;
 static const uint8_t INTERVAL_MIN_MAX = 30;
 static const uint8_t WARN_SEC_MIN = 0;
 static const uint8_t WARN_SEC_MAX = 60;
+static const uint8_t SIGNAL_INTERVAL_INDEX_MAX = 2;
 
 // Defaults
 static const uint8_t DEFAULT_INTERVAL_MIN = 10;
 static const uint8_t DEFAULT_WARN_SEC = 20;
+static const uint8_t DEFAULT_SIGNAL_INTERVAL_INDEX = 2;
 
-// UI timing
-static const unsigned long DEBOUNCE_MS = 30;
-static const unsigned long BOOT_HOLD_WARN_MS = 2000;
-static const unsigned long DISPLAY_PERIOD_MS = 200;
+// Timing
+static const unsigned long UI_PERIOD_MS = 100;
+static const unsigned long HOLD_ACTION_MS = 1200;
+static const int16_t SWIPE_MIN_X_PX = 45;
+static const int16_t SWIPE_MAX_Y_PX = 90;
 
 // Beep/Alarm settings
 static const uint16_t WARN_SPEAKER_FREQ_HZ = 2400;
@@ -49,77 +36,153 @@ static const uint8_t WARN_DUTY_END_PCT = 92;
 static const unsigned long ALARM_RAMP_MS = 30000;
 static const unsigned long ALARM_MAX_MS = 300000;
 
+// Fog signal settings. COLREG-style intervals use at most 2 minutes between groups.
+static const unsigned long SIGNAL_INTERVAL_OPTIONS_MS[] = {30000, 60000, 120000};
+static const unsigned long FOG_PROLONGED_MS = 5000;
+static const unsigned long FOG_SHORT_MS = 1000;
+static const unsigned long FOG_GAP_MS = 2000;
+
+// Raymarine/LightHouse-inspired marine palette: high contrast, dark panels, red accents.
+static const uint16_t COLOR_BG = 0x0006;
+static const uint16_t COLOR_PANEL = 0x1084;
+static const uint16_t COLOR_BUTTON = 0x2945;
+static const uint16_t COLOR_BUTTON_DIM = 0x18C3;
+static const uint16_t COLOR_TEXT = 0xFFFF;
+static const uint16_t COLOR_TEXT_MUTED = 0x8C71;
+static const uint16_t COLOR_LINE = 0x4A69;
+static const uint16_t COLOR_RED = 0xE800;
+static const uint16_t COLOR_AMBER = 0xFD20;
+static const uint16_t COLOR_GREEN = 0x2589;
+static const uint16_t COLOR_CYAN = 0x04DF;
+
 struct Config {
-  uint8_t magic;
   uint8_t interval_min;
   uint8_t warn_sec;
-  uint8_t checksum;
+  uint8_t fog_pattern;
+  uint8_t signal_interval_index;
 };
-
-static const uint8_t CONFIG_MAGIC = 0xA5;
 
 enum TimerState {
   STATE_DISARMED = 0,
-  STATE_SET_WARN,
   STATE_ARMED,
   STATE_WARNING,
   STATE_ALARM
 };
 
-struct ButtonState {
-  bool stable = false;
-  bool last_read = false;
-  unsigned long last_change_ms = 0;
-  bool pressed = false;
-  bool released = false;
-  unsigned long down_since_ms = 0;
+enum Screen {
+  SCREEN_TIMER = 0,
+  SCREEN_SIGNALS,
+  SCREEN_TIMER_SETTINGS,
+  SCREEN_SIGNALS_SETTINGS
 };
 
+enum HoldAction {
+  HOLD_NONE = 0,
+  HOLD_ARM,
+  HOLD_DISARM,
+  HOLD_SIGNAL_OFF,
+  HOLD_SIGNAL_SAILING,
+  HOLD_SIGNAL_POWER,
+  HOLD_SIGNAL_STOPPED
+};
+
+enum FogPattern {
+  FOG_SAILING = 0,
+  FOG_POWER_MAKING_WAY,
+  FOG_STOPPED,
+  FOG_PATTERN_COUNT
+};
+
+struct Rect {
+  int16_t x;
+  int16_t y;
+  int16_t w;
+  int16_t h;
+};
+
+Preferences prefs;
+M5Canvas ui(&M5.Display);
 Config config;
 TimerState state = STATE_DISARMED;
-ButtonState button;
-
-bool display_ok = false;
-unsigned long last_display_ms = 0;
+Screen screen = SCREEN_TIMER;
 
 unsigned long interval_ms = 0;
 unsigned long remaining_ms = 0;
 unsigned long last_tick_ms = 0;
 unsigned long alarm_start_ms = 0;
 
-unsigned long adjust_hold_start_ms = 0;
-unsigned long next_adjust_ms = 0;
-
 bool speaker_on = false;
 unsigned long speaker_cycle_start_ms = 0;
 unsigned long speaker_off_ms = 0;
 
-bool relay_on = false;
-unsigned long relay_cycle_start_ms = 0;
-unsigned long relay_off_ms = 0;
+bool alarm_relay_on = false;
+bool fog_relay_on = false;
+unsigned long alarm_cycle_start_ms = 0;
+unsigned long alarm_off_ms = 0;
 
-uint16_t rotary_filtered = 0;
-bool rotary_initialized = false;
-uint8_t interval_min_runtime = DEFAULT_INTERVAL_MIN;
+bool fog_auto_enabled = false;
+bool fog_group_active = false;
+uint8_t fog_step = 0;
+unsigned long fog_next_ms = 0;
+bool manual_horn_armed = false;
 
-uint8_t checksumFor(const Config &cfg) {
-  return (uint8_t)(cfg.magic ^ cfg.interval_min ^ cfg.warn_sec ^ 0x5A);
+HoldAction hold_action = HOLD_NONE;
+unsigned long hold_start_ms = 0;
+bool touch_started_on_hold_control = false;
+
+unsigned long last_ui_ms = 0;
+bool force_redraw = true;
+
+static const Rect HEADER_GEAR = {282, 4, 34, 28};
+static const Rect HEADER_DONE = {246, 4, 70, 28};
+
+static const Rect TIMER_PRIMARY_FULL = {18, 150, 284, 64};
+static const Rect TIMER_PRIMARY = {18, 150, 134, 64};
+static const Rect TIMER_SECONDARY = {168, 150, 134, 64};
+
+static const Rect SETTINGS_INTERVAL_MINUS = {18, 84, 54, 42};
+static const Rect SETTINGS_INTERVAL_PLUS = {226, 84, 54, 42};
+static const Rect SETTINGS_WARN_MINUS = {18, 156, 54, 42};
+static const Rect SETTINGS_WARN_PLUS = {226, 156, 54, 42};
+static const Rect SETTINGS_SIGNAL_30 = {18, 128, 88, 54};
+static const Rect SETTINGS_SIGNAL_60 = {116, 128, 88, 54};
+static const Rect SETTINGS_SIGNAL_120 = {214, 128, 88, 54};
+
+static const Rect SIGNALS_MANUAL = {18, 48, 284, 54};
+static const Rect SIGNALS_OFF = {18, 142, 66, 54};
+static const Rect SIGNALS_SAILING = {92, 142, 66, 54};
+static const Rect SIGNALS_POWER = {166, 142, 66, 54};
+static const Rect SIGNALS_STOPPED = {240, 142, 66, 54};
+static const Rect OUTPUT_ALARM_ICON = {264, 218, 22, 18};
+static const Rect OUTPUT_HORN_ICON = {292, 218, 22, 18};
+
+uint8_t clampU8(uint8_t value, uint8_t min_value, uint8_t max_value) {
+  if (value < min_value) {
+    return min_value;
+  }
+  if (value > max_value) {
+    return max_value;
+  }
+  return value;
 }
 
 void saveConfig() {
-  config.magic = CONFIG_MAGIC;
-  config.checksum = checksumFor(config);
-  EEPROM.put(0, config);
+  prefs.putUChar("interval", config.interval_min);
+  prefs.putUChar("warn", config.warn_sec);
+  prefs.putUChar("fog", config.fog_pattern);
+  prefs.putUChar("sigint", config.signal_interval_index);
 }
 
 void loadConfig() {
-  EEPROM.get(0, config);
-  bool valid = config.magic == CONFIG_MAGIC && config.checksum == checksumFor(config);
-  if (!valid || config.interval_min < INTERVAL_MIN_MIN || config.interval_min > INTERVAL_MIN_MAX ||
-      config.warn_sec < WARN_SEC_MIN || config.warn_sec > WARN_SEC_MAX) {
-    config.interval_min = DEFAULT_INTERVAL_MIN;
-    config.warn_sec = DEFAULT_WARN_SEC;
-    saveConfig();
+  config.interval_min = prefs.getUChar("interval", DEFAULT_INTERVAL_MIN);
+  config.warn_sec = prefs.getUChar("warn", DEFAULT_WARN_SEC);
+  config.fog_pattern = prefs.getUChar("fog", FOG_SAILING);
+  config.signal_interval_index = prefs.getUChar("sigint", DEFAULT_SIGNAL_INTERVAL_INDEX);
+  config.interval_min = clampU8(config.interval_min, INTERVAL_MIN_MIN, INTERVAL_MIN_MAX);
+  config.warn_sec = clampU8(config.warn_sec, WARN_SEC_MIN, WARN_SEC_MAX);
+  config.signal_interval_index = clampU8(config.signal_interval_index, 0, SIGNAL_INTERVAL_INDEX_MAX);
+  if (config.fog_pattern >= FOG_PATTERN_COUNT) {
+    config.fog_pattern = FOG_SAILING;
   }
 }
 
@@ -131,149 +194,97 @@ void setRelayPin(uint8_t pin, bool on) {
   }
 }
 
-void setRelay(bool on) {
-  relay_on = on;
-  setRelayPin(RELAY_PIN, on);
+void setAlarmRelay(bool on) {
+  alarm_relay_on = on;
+  setRelayPin(ALARM_RELAY_PIN, on);
 }
 
-void stopOutputs() {
+void setFogRelay(bool on) {
+  fog_relay_on = on;
+  setRelayPin(FOG_RELAY_PIN, on);
+}
+
+void stopSpeaker() {
   if (speaker_on) {
-    noTone(SPEAKER_PIN);
+    M5.Speaker.stop();
     speaker_on = false;
   }
-  setRelay(false);
-  setRelayPin(RELAY2_PIN, false);
 }
 
-bool isArmSwitchOn() {
-  return digitalRead(ARM_PIN) == LOW;
+void stopAlarmOutput() {
+  stopSpeaker();
+  setAlarmRelay(false);
 }
 
-bool isButtonPressed() {
-  bool pin_low = (digitalRead(BUTTON_PIN) == LOW);
-  return BUTTON_ACTIVE_LOW ? pin_low : !pin_low;
+void stopFogOutput() {
+  setFogRelay(false);
+  manual_horn_armed = false;
+  fog_group_active = false;
+  fog_step = 0;
 }
 
-void updateButton(unsigned long now) {
-  button.pressed = false;
-  button.released = false;
-
-  bool raw = isButtonPressed();
-  if (raw != button.last_read) {
-    button.last_read = raw;
-    button.last_change_ms = now;
-  }
-
-  if ((now - button.last_change_ms) > DEBOUNCE_MS && raw != button.stable) {
-    button.stable = raw;
-    if (button.stable) {
-      button.pressed = true;
-      button.down_since_ms = now;
-    } else {
-      button.released = true;
-    }
-  }
+void stopAllOutputs() {
+  stopAlarmOutput();
+  stopFogOutput();
 }
 
-void startAdjust() {
-  adjust_hold_start_ms = millis();
-  next_adjust_ms = adjust_hold_start_ms;
-}
-
-unsigned long adjustStepIntervalMs(unsigned long held_ms) {
-  if (held_ms < 2000) {
-    return 600;
-  }
-  if (held_ms < 5000) {
-    return 300;
-  }
-  return 120;
-}
-
-void updateAdjustWarn(unsigned long now) {
-  if (now < next_adjust_ms) {
-    return;
-  }
-  uint8_t next = config.warn_sec + 1;
-  if (next > WARN_SEC_MAX) {
-    next = WARN_SEC_MIN;
-  }
-  config.warn_sec = next;
-  unsigned long held_ms = now - adjust_hold_start_ms;
-  next_adjust_ms = now + adjustStepIntervalMs(held_ms);
-}
-
-uint8_t clampIntervalMinutes(uint8_t value) {
-  if (value < INTERVAL_MIN_MIN) {
-    return INTERVAL_MIN_MIN;
-  }
-  if (value > INTERVAL_MIN_MAX) {
-    return INTERVAL_MIN_MAX;
-  }
-  return value;
-}
-
-uint8_t mapRotaryToMinutes(uint16_t reading) {
-  uint16_t span = INTERVAL_MIN_MAX - INTERVAL_MIN_MIN;
-  uint16_t scaled = (reading * span) / 1023U;
-  return clampIntervalMinutes((uint8_t)(INTERVAL_MIN_MIN + scaled));
-}
-
-void updateIntervalFromRotary() {
-  uint16_t reading = (uint16_t)analogRead(ROTARY_PIN);
-  if (!rotary_initialized) {
-    rotary_filtered = reading;
-    rotary_initialized = true;
-  } else {
-    rotary_filtered = (uint16_t)((rotary_filtered * 7U + reading) / 8U);
-  }
-  interval_min_runtime = mapRotaryToMinutes(rotary_filtered);
-  config.interval_min = interval_min_runtime;
+void formatTime(unsigned long ms, char *buf, size_t len) {
+  unsigned long total_sec = (ms + 999UL) / 1000UL;
+  unsigned int minutes = total_sec / 60UL;
+  unsigned int seconds = total_sec % 60UL;
+  snprintf(buf, len, "%02u:%02u", minutes, seconds);
 }
 
 void enterDisarmed() {
   state = STATE_DISARMED;
-  stopOutputs();
+  stopAlarmOutput();
+  force_redraw = true;
 }
 
 void enterArmed(unsigned long now) {
-  interval_ms = (unsigned long)interval_min_runtime * 60UL * 1000UL;
+  interval_ms = (unsigned long)config.interval_min * 60UL * 1000UL;
   remaining_ms = interval_ms;
   last_tick_ms = now;
-  state = (config.warn_sec > 0) ? STATE_ARMED : STATE_ARMED;
-  stopOutputs();
+  state = STATE_ARMED;
+  stopAlarmOutput();
+  force_redraw = true;
 }
 
 void enterAlarm(unsigned long now) {
   state = STATE_ALARM;
   alarm_start_ms = now;
-  relay_cycle_start_ms = now;
-  relay_off_ms = now;
-  setRelay(true);
+  alarm_cycle_start_ms = now;
+  alarm_off_ms = now;
+  stopSpeaker();
+  setAlarmRelay(true);
+  force_redraw = true;
 }
 
 void resetCountdown(unsigned long now) {
-  interval_ms = (unsigned long)interval_min_runtime * 60UL * 1000UL;
+  interval_ms = (unsigned long)config.interval_min * 60UL * 1000UL;
   remaining_ms = interval_ms;
   last_tick_ms = now;
+  state = STATE_ARMED;
+  stopAlarmOutput();
+  force_redraw = true;
 }
 
 void updateCountdown(unsigned long now) {
-  unsigned long delta = now - last_tick_ms;
-  if (delta == 0) {
+  if (now <= last_tick_ms) {
     return;
   }
+
+  unsigned long delta = now - last_tick_ms;
   last_tick_ms = now;
 
   if (delta >= remaining_ms) {
     remaining_ms = 0;
-  } else {
-    remaining_ms -= delta;
+    enterAlarm(now);
+    return;
   }
 
-  if (remaining_ms == 0) {
-    enterAlarm(now);
-  } else if (config.warn_sec > 0 && remaining_ms <= (unsigned long)config.warn_sec * 1000UL) {
+  remaining_ms -= delta;
+  if (config.warn_sec > 0 && remaining_ms <= (unsigned long)config.warn_sec * 1000UL) {
     state = STATE_WARNING;
   } else {
     state = STATE_ARMED;
@@ -282,10 +293,7 @@ void updateCountdown(unsigned long now) {
 
 void updateWarningSpeaker(unsigned long now) {
   if (config.warn_sec == 0) {
-    if (speaker_on) {
-      noTone(SPEAKER_PIN);
-      speaker_on = false;
-    }
+    stopSpeaker();
     return;
   }
 
@@ -299,237 +307,701 @@ void updateWarningSpeaker(unsigned long now) {
   unsigned long period = WARN_PERIOD_START_MS - (elapsed * period_span) / warn_window_ms;
   uint8_t duty = WARN_DUTY_START_PCT + (uint8_t)((elapsed * (WARN_DUTY_END_PCT - WARN_DUTY_START_PCT)) / warn_window_ms);
   unsigned long on_time = (period * duty) / 100UL;
-  if (on_time >= period && period > 5) {
-    on_time = period - 5;
+
+  if (speaker_on && now >= speaker_off_ms) {
+    M5.Speaker.stop();
+    speaker_on = false;
   }
 
   if (now - speaker_cycle_start_ms >= period) {
     speaker_cycle_start_ms = now;
     speaker_off_ms = now + on_time;
-    tone(SPEAKER_PIN, WARN_SPEAKER_FREQ_HZ);
+    M5.Speaker.tone(WARN_SPEAKER_FREQ_HZ, on_time);
     speaker_on = true;
-  }
-
-  if (speaker_on && now >= speaker_off_ms) {
-    noTone(SPEAKER_PIN);
-    speaker_on = false;
   }
 }
 
 void updateAlarmRelay(unsigned long now) {
   unsigned long elapsed = now - alarm_start_ms;
   if (elapsed >= ALARM_MAX_MS) {
-    if (relay_on) {
-      setRelay(false);
+    if (alarm_relay_on) {
+      setAlarmRelay(false);
+      force_redraw = true;
     }
     return;
   }
 
   if (elapsed >= ALARM_RAMP_MS) {
-    if (!relay_on) {
-      setRelay(true);
+    if (!alarm_relay_on) {
+      setAlarmRelay(true);
+      force_redraw = true;
     }
     return;
   }
 
-  unsigned long period = 1200 - (elapsed * 800UL) / ALARM_RAMP_MS; // 1200 -> 400 ms
-  unsigned long on_time = period / 2;
+  unsigned long period = 1000UL - (elapsed * 750UL) / ALARM_RAMP_MS;
+  unsigned long on_time = period / 2UL;
 
-  if (now - relay_cycle_start_ms >= period) {
-    relay_cycle_start_ms = now;
-    relay_off_ms = now + on_time;
-    setRelay(true);
+  if (now - alarm_cycle_start_ms >= period) {
+    alarm_cycle_start_ms = now;
+    alarm_off_ms = now + on_time;
+    setAlarmRelay(true);
   }
 
-  if (relay_on && now >= relay_off_ms) {
-    setRelay(false);
+  if (alarm_relay_on && now >= alarm_off_ms) {
+    setAlarmRelay(false);
   }
 }
 
-void formatTime(unsigned long ms, char *out, size_t out_len) {
-  unsigned long total_seconds = ms / 1000UL;
-  unsigned long minutes = total_seconds / 60UL;
-  unsigned long seconds = total_seconds % 60UL;
-  if (minutes > 99) {
-    minutes = 99;
+const char *fogPatternName(uint8_t pattern) {
+  switch (pattern) {
+    case FOG_SAILING:
+      return "Sailing";
+    case FOG_POWER_MAKING_WAY:
+      return "Power";
+    case FOG_STOPPED:
+      return "Stopped";
+    default:
+      return "Sailing";
   }
-  snprintf(out, out_len, "%02lu:%02lu", minutes, seconds);
 }
 
-void drawDisplay(unsigned long now) {
-  if (!display_ok) {
-    return;
+unsigned long signalGroupIntervalMs() {
+  if (config.fog_pattern == FOG_STOPPED) {
+    return SIGNAL_INTERVAL_OPTIONS_MS[SIGNAL_INTERVAL_INDEX_MAX];
   }
-  if (now - last_display_ms < DISPLAY_PERIOD_MS) {
-    return;
-  }
-  last_display_ms = now;
+  return SIGNAL_INTERVAL_OPTIONS_MS[config.signal_interval_index];
+}
 
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
+uint8_t fogPatternStepCount(uint8_t pattern) {
+  switch (pattern) {
+    case FOG_SAILING:
+      return 5;  // prolonged, gap, short, gap, short
+    case FOG_POWER_MAKING_WAY:
+      return 1;  // prolonged
+    case FOG_STOPPED:
+      return 3;  // prolonged, gap, prolonged
+    default:
+      return 1;
+  }
+}
+
+bool fogStepIsBlast(uint8_t pattern, uint8_t step) {
+  if (pattern == FOG_POWER_MAKING_WAY) {
+    return step == 0;
+  }
+  if (pattern == FOG_STOPPED) {
+    return step == 0 || step == 2;
+  }
+  return step == 0 || step == 2 || step == 4;
+}
+
+unsigned long fogStepDuration(uint8_t pattern, uint8_t step) {
+  if (!fogStepIsBlast(pattern, step)) {
+    return FOG_GAP_MS;
+  }
+  if (pattern == FOG_SAILING && (step == 2 || step == 4)) {
+    return FOG_SHORT_MS;
+  }
+  return FOG_PROLONGED_MS;
+}
+
+void startFogGroup(unsigned long now) {
+  fog_group_active = true;
+  fog_step = 0;
+  setFogRelay(fogStepIsBlast(config.fog_pattern, fog_step));
+  fog_next_ms = now + fogStepDuration(config.fog_pattern, fog_step);
+  force_redraw = true;
+}
+
+void updateFog(unsigned long now, bool touch_holding_manual) {
+  if (state == STATE_ALARM) {
+    stopFogOutput();
+    return;
+  }
+
+  if (touch_holding_manual) {
+    if (!fog_relay_on) {
+      setFogRelay(true);
+      force_redraw = true;
+    }
+    fog_group_active = false;
+    return;
+  }
+
+  if (!fog_auto_enabled) {
+    if (fog_relay_on) {
+      setFogRelay(false);
+      force_redraw = true;
+    }
+    fog_group_active = false;
+    return;
+  }
+
+  if (!fog_group_active && now >= fog_next_ms) {
+    startFogGroup(now);
+    return;
+  }
+
+  if (!fog_group_active || now < fog_next_ms) {
+    return;
+  }
+
+  fog_step++;
+  if (fog_step >= fogPatternStepCount(config.fog_pattern)) {
+    fog_group_active = false;
+    setFogRelay(false);
+    fog_next_ms = now + signalGroupIntervalMs();
+    force_redraw = true;
+    return;
+  }
+
+  setFogRelay(fogStepIsBlast(config.fog_pattern, fog_step));
+  fog_next_ms = now + fogStepDuration(config.fog_pattern, fog_step);
+  force_redraw = true;
+}
+
+bool rectContains(const Rect &r, int16_t x, int16_t y) {
+  return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+void drawButton(const Rect &r, const char *label, uint32_t fill, uint32_t text, uint32_t outline = COLOR_LINE) {
+  ui.setTextSize(1);
+  ui.fillRect(r.x, r.y, r.w, r.h, fill);
+  ui.drawRect(r.x, r.y, r.w, r.h, outline);
+  ui.setTextColor(text, fill);
+  ui.setTextDatum(middle_center);
+  ui.drawString(label, r.x + r.w / 2, r.y + r.h / 2);
+  ui.setTextDatum(top_left);
+}
+
+void drawPageDots(bool timer_active) {
+  ui.fillCircle(145, 18, 4, timer_active ? COLOR_TEXT : COLOR_LINE);
+  ui.drawCircle(145, 18, 4, COLOR_LINE);
+  ui.fillCircle(161, 18, 4, timer_active ? COLOR_LINE : COLOR_TEXT);
+  ui.drawCircle(161, 18, 4, COLOR_LINE);
+}
+
+void drawModeHeader(const char *title, bool timer_active) {
+  ui.fillRect(0, 0, 320, 36, COLOR_PANEL);
+  ui.fillRect(0, 34, 320, 2, COLOR_RED);
+  ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
+  ui.setTextDatum(middle_left);
+  ui.setTextSize(2);
+  ui.drawString(title, 8, 18);
+  ui.setTextDatum(top_left);
+  drawPageDots(timer_active);
+  drawButton(HEADER_GEAR, "*", COLOR_BUTTON_DIM, COLOR_TEXT, COLOR_RED);
+}
+
+void drawSettingsHeader(const char *title) {
+  ui.fillRect(0, 0, 320, 36, COLOR_PANEL);
+  ui.fillRect(0, 34, 320, 2, COLOR_RED);
+  ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
+  ui.setTextDatum(middle_left);
+  ui.setTextSize(2);
+  ui.drawString(title, 8, 18);
+  ui.setTextDatum(top_left);
+  drawButton(HEADER_DONE, "Done", COLOR_BUTTON, COLOR_TEXT, COLOR_RED);
+}
+
+void drawSwipeCue(bool show_left, bool show_right) {
+  ui.setTextColor(COLOR_LINE, COLOR_BG);
+  ui.setTextDatum(middle_center);
+  ui.setTextSize(2);
+  if (show_left) {
+    ui.drawString("<", 8, 118);
+  }
+  if (show_right) {
+    ui.drawString(">", 312, 118);
+  }
+  ui.setTextDatum(top_left);
+}
+
+void drawTimerScreen(unsigned long now) {
+  drawModeHeader("Timer", true);
+  drawSwipeCue(false, true);
 
   char time_buf[8] = {0};
+  formatTime(state == STATE_DISARMED ? (unsigned long)config.interval_min * 60UL * 1000UL : remaining_ms, time_buf, sizeof(time_buf));
 
-  switch (state) {
-    case STATE_DISARMED:
-      display.setTextSize(1);
-      display.setCursor(0, 0);
-      display.print("DISARMED");
-      display.setCursor(0, 16);
-      display.print("Interval:");
-      formatTime((unsigned long)interval_min_runtime * 60UL * 1000UL, time_buf, sizeof(time_buf));
-      display.setTextSize(2);
-      display.setCursor(0, 28);
-      display.print(time_buf);
-      display.setTextSize(1);
-      display.setCursor(0, 52);
-      display.print("Warn: ");
-      display.print(config.warn_sec);
-      display.print("s");
+  ui.fillRect(28, 44, 264, 92, COLOR_PANEL);
+  ui.drawRect(28, 44, 264, 92, COLOR_LINE);
+  ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
+  ui.setTextDatum(top_center);
+  ui.setTextSize(2);
+  ui.drawString(state == STATE_ALARM ? "ALARM" : state == STATE_WARNING ? "WARNING" : state == STATE_ARMED ? "ARMED" : "DISARMED", 160, 46);
+  ui.setTextSize(5);
+  ui.drawString(state == STATE_ALARM ? "TIME UP" : time_buf, 160, 78);
+  ui.setTextSize(1);
+  ui.drawString(String("Warn ") + config.warn_sec + "s", 160, 132);
+  ui.setTextDatum(top_left);
+
+  if (state == STATE_DISARMED) {
+    drawButton(TIMER_PRIMARY_FULL, "Hold to Arm", COLOR_GREEN, COLOR_TEXT, COLOR_LINE);
+  } else if (state == STATE_ALARM) {
+    drawButton(TIMER_PRIMARY, "Ack", COLOR_RED, COLOR_TEXT);
+    drawButton(TIMER_SECONDARY, "Hold Disarm", COLOR_BUTTON, COLOR_TEXT);
+  } else {
+    drawButton(TIMER_PRIMARY, "Reset", COLOR_CYAN, COLOR_TEXT);
+    drawButton(TIMER_SECONDARY, "Hold Disarm", COLOR_BUTTON, COLOR_TEXT);
+  }
+}
+
+void drawTimerSettingsScreen() {
+  drawSettingsHeader("Timer Settings");
+
+  ui.setTextColor(COLOR_TEXT, COLOR_BG);
+  ui.setTextDatum(top_center);
+  ui.setTextSize(2);
+  ui.drawString("Interval", 150, 78);
+  ui.setTextSize(3);
+  ui.drawString(String(config.interval_min) + " min", 150, 104);
+
+  ui.setTextSize(2);
+  ui.drawString("Warning", 150, 150);
+  ui.setTextSize(3);
+  ui.drawString(String(config.warn_sec) + " sec", 150, 176);
+  ui.setTextDatum(top_left);
+
+  drawButton(SETTINGS_INTERVAL_MINUS, "-", COLOR_BUTTON, COLOR_TEXT);
+  drawButton(SETTINGS_INTERVAL_PLUS, "+", COLOR_BUTTON, COLOR_TEXT);
+  drawButton(SETTINGS_WARN_MINUS, "-", COLOR_BUTTON, COLOR_TEXT);
+  drawButton(SETTINGS_WARN_PLUS, "+", COLOR_BUTTON, COLOR_TEXT);
+}
+
+uint32_t signalIntervalButtonColor(uint8_t index) {
+  return config.signal_interval_index == index ? COLOR_AMBER : COLOR_BUTTON;
+}
+
+void drawSignalSettingsScreen() {
+  drawSettingsHeader("Signals Settings");
+
+  ui.setTextColor(COLOR_TEXT, COLOR_BG);
+  ui.setTextDatum(top_center);
+  ui.setTextSize(2);
+  ui.drawString("Underway interval", 160, 90);
+  ui.setTextSize(1);
+  ui.drawString("Sailing + Power", 160, 114);
+  ui.setTextDatum(top_left);
+
+  drawButton(SETTINGS_SIGNAL_30, "30s", signalIntervalButtonColor(0), COLOR_TEXT, config.signal_interval_index == 0 ? COLOR_TEXT : COLOR_LINE);
+  drawButton(SETTINGS_SIGNAL_60, "60s", signalIntervalButtonColor(1), COLOR_TEXT, config.signal_interval_index == 1 ? COLOR_TEXT : COLOR_LINE);
+  drawButton(SETTINGS_SIGNAL_120, "120s", signalIntervalButtonColor(2), COLOR_TEXT, config.signal_interval_index == 2 ? COLOR_TEXT : COLOR_LINE);
+}
+
+uint32_t signalButtonColor(uint8_t pattern) {
+  return fog_auto_enabled && config.fog_pattern == pattern ? COLOR_AMBER : COLOR_BUTTON;
+}
+
+uint32_t signalOffButtonColor() {
+  return fog_auto_enabled ? COLOR_BUTTON : COLOR_AMBER;
+}
+
+void drawOutputIcon(const Rect &r, const char *label, bool active, uint32_t active_color) {
+  uint32_t fill = active ? active_color : COLOR_BG;
+  uint32_t outline = active ? COLOR_TEXT : COLOR_LINE;
+  uint32_t text = active ? COLOR_BG : COLOR_TEXT_MUTED;
+
+  ui.fillRect(r.x, r.y, r.w, r.h, fill);
+  ui.drawRect(r.x, r.y, r.w, r.h, outline);
+  ui.setTextSize(1);
+  ui.setTextColor(text, fill);
+  ui.setTextDatum(middle_center);
+  ui.drawString(label, r.x + r.w / 2, r.y + r.h / 2);
+  ui.setTextDatum(top_left);
+}
+
+void drawOutputIndicators() {
+  drawOutputIcon(OUTPUT_ALARM_ICON, "A", alarm_relay_on, COLOR_RED);
+  drawOutputIcon(OUTPUT_HORN_ICON, "H", fog_relay_on, COLOR_AMBER);
+}
+
+void drawSignalsScreen(unsigned long now) {
+  drawModeHeader("Signals", false);
+  drawSwipeCue(true, false);
+
+  ui.fillRect(28, 104, 264, 28, COLOR_PANEL);
+  ui.drawRect(28, 104, 264, 28, COLOR_LINE);
+  ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
+  ui.setTextDatum(top_center);
+  ui.setTextSize(2);
+  ui.drawString("Fog / Auto", 160, 112);
+  ui.setTextSize(1);
+  if (fog_auto_enabled && !fog_group_active) {
+    unsigned long until = fog_next_ms > now ? (fog_next_ms - now + 999UL) / 1000UL : 0;
+    ui.drawString(String("Next in ") + until + "s", 160, 210);
+  } else if (fog_group_active) {
+    ui.drawString(fog_relay_on ? "Horn sounding" : "Signal gap", 160, 210);
+  }
+  ui.setTextDatum(top_left);
+
+  drawButton(SIGNALS_MANUAL, fog_relay_on ? "Horn On" : "Horn", fog_relay_on ? COLOR_AMBER : COLOR_CYAN, COLOR_TEXT);
+  drawButton(SIGNALS_OFF, "Off", signalOffButtonColor(), COLOR_TEXT, !fog_auto_enabled ? COLOR_TEXT : COLOR_LINE);
+  drawButton(SIGNALS_SAILING, "Sailing", signalButtonColor(FOG_SAILING), COLOR_TEXT, config.fog_pattern == FOG_SAILING && fog_auto_enabled ? COLOR_TEXT : COLOR_LINE);
+  drawButton(SIGNALS_POWER, "Power", signalButtonColor(FOG_POWER_MAKING_WAY), COLOR_TEXT, config.fog_pattern == FOG_POWER_MAKING_WAY && fog_auto_enabled ? COLOR_TEXT : COLOR_LINE);
+  drawButton(SIGNALS_STOPPED, "Stopped", signalButtonColor(FOG_STOPPED), COLOR_TEXT, config.fog_pattern == FOG_STOPPED && fog_auto_enabled ? COLOR_TEXT : COLOR_LINE);
+
+}
+
+void drawHoldProgress(unsigned long now) {
+  if (hold_action == HOLD_NONE) {
+    return;
+  }
+
+  unsigned long held_ms = now - hold_start_ms;
+  uint16_t progress = held_ms >= HOLD_ACTION_MS ? 320 : (uint16_t)((held_ms * 320UL) / HOLD_ACTION_MS);
+
+  ui.fillRect(0, 0, 320, 34, COLOR_PANEL);
+  ui.fillRect(0, 0, progress, 34, COLOR_AMBER);
+  ui.drawRect(0, 0, 320, 34, COLOR_TEXT);
+  ui.setTextSize(2);
+  ui.setTextColor(progress > 150 ? COLOR_BG : COLOR_TEXT, progress > 150 ? COLOR_AMBER : COLOR_PANEL);
+  ui.setTextDatum(middle_center);
+  ui.drawString("HOLD", 160, 17);
+  ui.setTextDatum(top_left);
+}
+
+void drawUi(unsigned long now) {
+  if (!force_redraw && now - last_ui_ms < UI_PERIOD_MS) {
+    return;
+  }
+  last_ui_ms = now;
+  force_redraw = false;
+
+  ui.fillScreen(COLOR_BG);
+
+  switch (screen) {
+    case SCREEN_TIMER:
+      drawTimerScreen(now);
       break;
-    case STATE_SET_WARN:
-      display.setTextSize(1);
-      display.setCursor(0, 0);
-      display.print("SET WARN");
-      display.setTextSize(3);
-      display.setCursor(0, 24);
-      display.print(config.warn_sec);
-      display.setTextSize(1);
-      display.setCursor(60, 44);
-      display.print("sec");
-      display.setCursor(0, 56);
-      display.print("Release to save");
+    case SCREEN_SIGNALS:
+      drawSignalsScreen(now);
       break;
-    case STATE_ARMED:
-    case STATE_WARNING:
-      display.setTextSize(1);
-      display.setCursor(0, 0);
-      display.print(state == STATE_WARNING ? "WARNING" : "ARMED");
-      formatTime(remaining_ms, time_buf, sizeof(time_buf));
-      display.setTextSize(3);
-      display.setCursor(0, 24);
-      display.print(time_buf);
-      display.setTextSize(1);
-      display.setCursor(0, 56);
-      display.print("Tap to reset");
+    case SCREEN_TIMER_SETTINGS:
+      drawTimerSettingsScreen();
       break;
-    case STATE_ALARM:
-      display.setTextSize(1);
-      display.setCursor(0, 0);
-      display.print("ALARM");
-      display.setTextSize(2);
-      display.setCursor(0, 24);
-      display.print("TIME UP");
-      display.setTextSize(1);
-      display.setCursor(0, 48);
-      display.print("Tap: restart");
-      display.setCursor(0, 56);
-      display.print("Switch: disarm");
+    case SCREEN_SIGNALS_SETTINGS:
+      drawSignalSettingsScreen();
       break;
   }
 
-  display.display();
+  drawOutputIndicators();
+  drawHoldProgress(now);
+  ui.pushSprite(0, 0);
+}
+
+void startHold(HoldAction action, unsigned long now) {
+  hold_action = action;
+  hold_start_ms = now;
+  force_redraw = true;
+}
+
+void clearHold() {
+  if (hold_action != HOLD_NONE || manual_horn_armed) {
+    hold_action = HOLD_NONE;
+    manual_horn_armed = false;
+    force_redraw = true;
+  }
+}
+
+void switchScreen(Screen next_screen) {
+  if (screen != next_screen) {
+    screen = next_screen;
+    force_redraw = true;
+  }
+}
+
+bool switchScreenBySwipe(int16_t distance_x, int16_t distance_y) {
+  if (abs(distance_x) < SWIPE_MIN_X_PX || abs(distance_y) > SWIPE_MAX_Y_PX) {
+    return false;
+  }
+
+  if (screen == SCREEN_TIMER && distance_x < 0) {
+    switchScreen(SCREEN_SIGNALS);
+    return true;
+  } else if (screen == SCREEN_SIGNALS && distance_x > 0) {
+    switchScreen(SCREEN_TIMER);
+    return true;
+  }
+  return false;
+}
+
+void selectFogPattern(uint8_t pattern, unsigned long now) {
+  if (fog_auto_enabled && config.fog_pattern == pattern) {
+    fog_auto_enabled = false;
+    fog_group_active = false;
+    setFogRelay(false);
+    force_redraw = true;
+    return;
+  }
+
+  config.fog_pattern = pattern;
+  saveConfig();
+  fog_auto_enabled = true;
+  fog_group_active = false;
+  setFogRelay(false);
+  fog_next_ms = now;
+  force_redraw = true;
+}
+
+void stopFogAuto() {
+  fog_auto_enabled = false;
+  fog_group_active = false;
+  setFogRelay(false);
+  force_redraw = true;
+}
+
+void applyHoldAction(unsigned long now) {
+  switch (hold_action) {
+    case HOLD_ARM:
+      enterArmed(now);
+      break;
+    case HOLD_DISARM:
+      enterDisarmed();
+      break;
+    case HOLD_SIGNAL_OFF:
+      stopFogAuto();
+      break;
+    case HOLD_SIGNAL_SAILING:
+      selectFogPattern(FOG_SAILING, now);
+      break;
+    case HOLD_SIGNAL_POWER:
+      selectFogPattern(FOG_POWER_MAKING_WAY, now);
+      break;
+    case HOLD_SIGNAL_STOPPED:
+      selectFogPattern(FOG_STOPPED, now);
+      break;
+    case HOLD_NONE:
+      break;
+  }
+  hold_action = HOLD_NONE;
+}
+
+void handleTap(int16_t x, int16_t y, unsigned long now) {
+  if (screen == SCREEN_TIMER) {
+    if (rectContains(HEADER_GEAR, x, y)) {
+      switchScreen(SCREEN_TIMER_SETTINGS);
+      return;
+    }
+    if (state == STATE_ALARM && rectContains(TIMER_PRIMARY, x, y)) {
+      enterArmed(now);
+      return;
+    }
+    if ((state == STATE_ARMED || state == STATE_WARNING) && rectContains(TIMER_PRIMARY, x, y)) {
+      resetCountdown(now);
+      return;
+    }
+  }
+
+  if (screen == SCREEN_SIGNALS) {
+    if (rectContains(HEADER_GEAR, x, y)) {
+      switchScreen(SCREEN_SIGNALS_SETTINGS);
+      return;
+    }
+    return;
+  }
+
+  if (screen == SCREEN_TIMER_SETTINGS) {
+    if (rectContains(HEADER_DONE, x, y)) {
+      switchScreen(SCREEN_TIMER);
+    } else if (rectContains(SETTINGS_INTERVAL_MINUS, x, y) && config.interval_min > INTERVAL_MIN_MIN) {
+      config.interval_min--;
+      saveConfig();
+      force_redraw = true;
+    } else if (rectContains(SETTINGS_INTERVAL_PLUS, x, y) && config.interval_min < INTERVAL_MIN_MAX) {
+      config.interval_min++;
+      saveConfig();
+      force_redraw = true;
+    } else if (rectContains(SETTINGS_WARN_MINUS, x, y) && config.warn_sec > WARN_SEC_MIN) {
+      config.warn_sec--;
+      saveConfig();
+      force_redraw = true;
+    } else if (rectContains(SETTINGS_WARN_PLUS, x, y) && config.warn_sec < WARN_SEC_MAX) {
+      config.warn_sec++;
+      saveConfig();
+      force_redraw = true;
+    }
+    return;
+  }
+
+  if (screen == SCREEN_SIGNALS_SETTINGS) {
+    if (rectContains(HEADER_DONE, x, y)) {
+      switchScreen(SCREEN_SIGNALS);
+    } else if (rectContains(SETTINGS_SIGNAL_30, x, y)) {
+      config.signal_interval_index = 0;
+      saveConfig();
+      fog_next_ms = fog_auto_enabled && !fog_group_active ? now : fog_next_ms;
+      force_redraw = true;
+    } else if (rectContains(SETTINGS_SIGNAL_60, x, y)) {
+      config.signal_interval_index = 1;
+      saveConfig();
+      fog_next_ms = fog_auto_enabled && !fog_group_active ? now : fog_next_ms;
+      force_redraw = true;
+    } else if (rectContains(SETTINGS_SIGNAL_120, x, y)) {
+      config.signal_interval_index = 2;
+      saveConfig();
+      fog_next_ms = fog_auto_enabled && !fog_group_active ? now : fog_next_ms;
+      force_redraw = true;
+    }
+    return;
+  }
+}
+
+void handleTouch(unsigned long now) {
+  auto touch = M5.Touch.getDetail();
+
+  if (touch.wasPressed()) {
+    int16_t x = touch.x;
+    int16_t y = touch.y;
+    touch_started_on_hold_control = false;
+
+    if (state == STATE_WARNING) {
+      resetCountdown(now);
+      return;
+    }
+    if (state == STATE_ALARM) {
+      enterArmed(now);
+      return;
+    }
+
+    if (screen == SCREEN_TIMER) {
+      if (state == STATE_DISARMED && rectContains(TIMER_PRIMARY_FULL, x, y)) {
+        touch_started_on_hold_control = true;
+        startHold(HOLD_ARM, now);
+        return;
+      }
+      if (rectContains(TIMER_SECONDARY, x, y) && state != STATE_DISARMED) {
+        touch_started_on_hold_control = true;
+        startHold(HOLD_DISARM, now);
+        return;
+      }
+    }
+
+    if (screen == SCREEN_SIGNALS && rectContains(SIGNALS_MANUAL, x, y)) {
+      touch_started_on_hold_control = true;
+      manual_horn_armed = true;
+      hold_start_ms = now;
+      setFogRelay(true);
+      fog_group_active = false;
+      force_redraw = true;
+      return;
+    }
+
+    if (screen == SCREEN_SIGNALS) {
+      if (rectContains(SIGNALS_OFF, x, y)) {
+        touch_started_on_hold_control = true;
+        startHold(HOLD_SIGNAL_OFF, now);
+        return;
+      }
+      if (rectContains(SIGNALS_SAILING, x, y)) {
+        touch_started_on_hold_control = true;
+        startHold(HOLD_SIGNAL_SAILING, now);
+        return;
+      }
+      if (rectContains(SIGNALS_POWER, x, y)) {
+        touch_started_on_hold_control = true;
+        startHold(HOLD_SIGNAL_POWER, now);
+        return;
+      }
+      if (rectContains(SIGNALS_STOPPED, x, y)) {
+        touch_started_on_hold_control = true;
+        startHold(HOLD_SIGNAL_STOPPED, now);
+        return;
+      }
+    }
+  }
+
+  bool handled_swipe = false;
+  if (touch.wasReleased()) {
+    handled_swipe = switchScreenBySwipe(touch.distanceX(), touch.distanceY());
+    touch_started_on_hold_control = false;
+    clearHold();
+  }
+
+  if (touch.wasClicked() && !handled_swipe) {
+    handleTap(touch.x, touch.y, now);
+  }
+
+  if (hold_action != HOLD_NONE && touch.isPressed()) {
+    bool still_inside = false;
+    if (hold_action == HOLD_ARM) {
+      still_inside = rectContains(TIMER_PRIMARY_FULL, touch.x, touch.y);
+    } else if (hold_action == HOLD_DISARM) {
+      still_inside = rectContains(TIMER_SECONDARY, touch.x, touch.y);
+    } else if (hold_action == HOLD_SIGNAL_OFF) {
+      still_inside = rectContains(SIGNALS_OFF, touch.x, touch.y);
+    } else if (hold_action == HOLD_SIGNAL_SAILING) {
+      still_inside = rectContains(SIGNALS_SAILING, touch.x, touch.y);
+    } else if (hold_action == HOLD_SIGNAL_POWER) {
+      still_inside = rectContains(SIGNALS_POWER, touch.x, touch.y);
+    } else if (hold_action == HOLD_SIGNAL_STOPPED) {
+      still_inside = rectContains(SIGNALS_STOPPED, touch.x, touch.y);
+    }
+
+    if (!still_inside) {
+      clearHold();
+    } else if (now - hold_start_ms >= HOLD_ACTION_MS) {
+      applyHoldAction(now);
+    } else {
+      force_redraw = true;
+    }
+  }
+
+  if (manual_horn_armed && touch.isPressed()) {
+    if (!rectContains(SIGNALS_MANUAL, touch.x, touch.y)) {
+      manual_horn_armed = false;
+      setFogRelay(false);
+      force_redraw = true;
+    }
+  }
 }
 
 void setup() {
-  pinMode(BUTTON_PIN, BUTTON_ACTIVE_LOW ? INPUT_PULLUP : INPUT);
-  pinMode(ARM_PIN, INPUT_PULLUP);
-  pinMode(RELAY_PIN, OUTPUT);
-  pinMode(RELAY2_PIN, OUTPUT);
-  pinMode(SPEAKER_PIN, OUTPUT);
-  setRelay(false);
-  setRelayPin(RELAY2_PIN, false);
+  auto cfg = M5.config();
+  M5.begin(cfg);
+  M5.Display.setRotation(1);
+  M5.Display.setBrightness(180);
+  ui.setColorDepth(16);
+  ui.createSprite(M5.Display.width(), M5.Display.height());
+  M5.Speaker.setVolume(180);
 
+  pinMode(ALARM_RELAY_PIN, OUTPUT);
+  pinMode(FOG_RELAY_PIN, OUTPUT);
+  setAlarmRelay(false);
+  setFogRelay(false);
+
+  prefs.begin("alarmsolo", false);
   loadConfig();
-  interval_min_runtime = clampIntervalMinutes(config.interval_min);
 
-  display_ok = display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
-  if (display_ok) {
-    display.clearDisplay();
-    display.display();
-  }
-
-  bool held_for_boot_window = isButtonPressed();
-  unsigned long boot_start = millis();
-  while (held_for_boot_window && (millis() - boot_start < BOOT_HOLD_WARN_MS)) {
-    if (!isButtonPressed()) {
-      held_for_boot_window = false;
-      break;
-    }
-    delay(10);
-  }
-
-  if (held_for_boot_window) {
-    state = STATE_SET_WARN;
-    startAdjust();
-  } else {
-    enterDisarmed();
-  }
+  enterDisarmed();
 }
 
 void loop() {
   unsigned long now = millis();
-  updateButton(now);
+  M5.update();
 
-  bool arm_on = isArmSwitchOn();
-
-  if (!arm_on) {
-    if (state != STATE_DISARMED && state != STATE_SET_WARN) {
-      enterDisarmed();
-    }
-  }
+  handleTouch(now);
 
   switch (state) {
-    case STATE_DISARMED: {
-      updateIntervalFromRotary();
-      if (arm_on) {
-        enterArmed(now);
-        break;
-      }
+    case STATE_DISARMED:
+      stopSpeaker();
       break;
-    }
-    case STATE_SET_WARN: {
-      if (button.released) {
-        saveConfig();
-        enterDisarmed();
-      } else if (button.stable) {
-        updateAdjustWarn(now);
-      }
-      break;
-    }
     case STATE_ARMED:
-    case STATE_WARNING: {
-      if (!arm_on) {
-        enterDisarmed();
-        break;
-      }
-      if (button.pressed) {
-        resetCountdown(now);
-      }
+    case STATE_WARNING:
       updateCountdown(now);
       if (state == STATE_WARNING) {
         updateWarningSpeaker(now);
       } else {
-        if (speaker_on) {
-          noTone(SPEAKER_PIN);
-          speaker_on = false;
-        }
+        stopSpeaker();
       }
       break;
-    }
-    case STATE_ALARM: {
-      if (!arm_on) {
-        enterDisarmed();
-        break;
-      }
-      if (button.pressed) {
-        enterArmed(now);
-        break;
-      }
+    case STATE_ALARM:
       updateAlarmRelay(now);
       break;
-    }
   }
 
-  drawDisplay(now);
+  bool manual_horn_active = manual_horn_armed && M5.Touch.getDetail().isPressed();
+  updateFog(now, manual_horn_active);
+  drawUi(now);
 }
