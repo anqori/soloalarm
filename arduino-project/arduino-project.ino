@@ -801,7 +801,7 @@ void drawSignalsScreen(unsigned long now) {
   drawSignalAutoButton(SIGNALS_STOPPED, "Stopped", fog_auto_enabled && config.fog_pattern == FOG_STOPPED);
   ui.drawFastHLine(0, 189, 320, COLOR_TEXT_DARK);
 
-  drawBottomButton(SIGNALS_MANUAL, fog_relay_on ? "Horn On" : "Horn", true, true, fog_relay_on ? COLOR_AMBER : COLOR_BUTTON);
+  drawBottomButton(SIGNALS_MANUAL, fog_relay_on ? "Horn On" : "Horn", true, true);
 
 }
 
