@@ -1007,16 +1007,6 @@ void handleTouch(unsigned long now) {
     int16_t y = touch.y;
     touch_started_on_hold_control = false;
 
-    bool timer_bottom_pressed = screen == SCREEN_TIMER && rectContains(TIMER_PRIMARY_FULL, x, y);
-    if (state == STATE_WARNING && !timer_bottom_pressed) {
-      resetCountdown(now);
-      return;
-    }
-    if (state == STATE_ALARM && !timer_bottom_pressed) {
-      enterArmed(now);
-      return;
-    }
-
     if (screen == SCREEN_TIMER) {
       if (state == STATE_DISARMED && rectContains(TIMER_PRIMARY_FULL, x, y)) {
         touch_started_on_hold_control = true;
@@ -1026,6 +1016,10 @@ void handleTouch(unsigned long now) {
       if (state != STATE_DISARMED && rectContains(TIMER_PRIMARY_FULL, x, y)) {
         touch_started_on_hold_control = true;
         startHold(HOLD_DISARM, now);
+        return;
+      }
+      if (state == STATE_ARMED || state == STATE_WARNING || state == STATE_ALARM) {
+        resetCountdown(now);
         return;
       }
     }
