@@ -45,27 +45,27 @@ static const unsigned long FOG_PROLONGED_MS = 5000;
 static const unsigned long FOG_SHORT_MS = 1000;
 static const unsigned long FOG_GAP_MS = 2000;
 
-#define RGB565(r, g, b) (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
+#define RGB(r, g, b) (uint32_t)(((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
 
 // i70-inspired instrument palette. Neutral colors are defined as RGB triples so
 // they are auditable; the panel white is deliberately warm to avoid a cyan cast
 // on the Tough LCD/backlight.
-static const uint16_t COLOR_BG = RGB565(0, 0, 0);
-static const uint16_t COLOR_WHITE = RGB565(255, 255, 255);
-static const uint16_t COLOR_PANEL = RGB565(255, 252, 244);
-static const uint16_t COLOR_BUTTON = RGB565(32, 32, 32);
-static const uint16_t COLOR_BUTTON_DIM = RGB565(16, 16, 16);
-static const uint16_t COLOR_BUTTON_HILITE = RGB565(80, 80, 80);
-static const uint16_t COLOR_BUTTON_MID = RGB565(40, 40, 40);
-static const uint16_t COLOR_BUTTON_SHADOW = RGB565(8, 8, 8);
-static const uint16_t COLOR_TEXT = COLOR_WHITE;
-static const uint16_t COLOR_TEXT_LIGHT = RGB565(190, 190, 190);
-static const uint16_t COLOR_TEXT_DARK = COLOR_BG;
-static const uint16_t COLOR_TEXT_MUTED = RGB565(110, 110, 110);
-static const uint16_t COLOR_HORN_IDLE = RGB565(132, 132, 132);
-static const uint16_t COLOR_LINE = RGB565(64, 64, 64);
-static const uint16_t COLOR_RED = RGB565(255, 0, 0);
-static const uint16_t COLOR_AMBER = RGB565(255, 165, 0);
+static const uint32_t COLOR_BG = RGB(0, 0, 0);
+static const uint32_t COLOR_WHITE = RGB(255, 255, 255);
+static const uint32_t COLOR_PANEL = RGB(255, 252, 244);
+static const uint32_t COLOR_BUTTON = RGB(32, 32, 32);
+static const uint32_t COLOR_BUTTON_DIM = RGB(16, 16, 16);
+static const uint32_t COLOR_BUTTON_HILITE = RGB(80, 80, 80);
+static const uint32_t COLOR_BUTTON_MID = RGB(40, 40, 40);
+static const uint32_t COLOR_BUTTON_SHADOW = RGB(8, 8, 8);
+static const uint32_t COLOR_TEXT = COLOR_WHITE;
+static const uint32_t COLOR_TEXT_LIGHT = RGB(190, 190, 190);
+static const uint32_t COLOR_TEXT_DARK = COLOR_BG;
+static const uint32_t COLOR_TEXT_MUTED = RGB(110, 110, 110);
+static const uint32_t COLOR_HORN_IDLE = RGB(132, 132, 132);
+static const uint32_t COLOR_LINE = RGB(64, 64, 64);
+static const uint32_t COLOR_RED = RGB(255, 0, 0);
+static const uint32_t COLOR_AMBER = RGB(255, 165, 0);
 
 struct Config {
   uint8_t interval_min;
@@ -501,7 +501,7 @@ void useTimeFont() {
   ui.setTextSize(2);
 }
 
-uint16_t blendBlackOver(uint16_t bg, uint8_t alpha4) {
+uint32_t blendBlackOver(uint32_t bg, uint8_t alpha4) {
   if (alpha4 == 0) {
     return bg;
   }
@@ -510,10 +510,10 @@ uint16_t blendBlackOver(uint16_t bg, uint8_t alpha4) {
   }
 
   uint8_t keep = 15 - alpha4;
-  uint8_t r = ((bg >> 11) & 0x1F) * keep / 15;
-  uint8_t g = ((bg >> 5) & 0x3F) * keep / 15;
-  uint8_t b = (bg & 0x1F) * keep / 15;
-  return (uint16_t)((r << 11) | (g << 5) | b);
+  uint8_t r = ((bg >> 16) & 0xFF) * keep / 15;
+  uint8_t g = ((bg >> 8) & 0xFF) * keep / 15;
+  uint8_t b = (bg & 0xFF) * keep / 15;
+  return RGB(r, g, b);
 }
 
 void drawAATimerGlyph(const AATimerGlyph *glyph, int16_t x, int16_t y) {
@@ -723,8 +723,8 @@ uint32_t signalOffButtonColor() {
 }
 
 void drawHornImage(bool active) {
-  uint16_t color = active ? COLOR_TEXT_DARK : COLOR_HORN_IDLE;
-  uint16_t bg = COLOR_PANEL;
+  uint32_t color = active ? COLOR_TEXT_DARK : COLOR_HORN_IDLE;
+  uint32_t bg = COLOR_PANEL;
   int16_t x = SIGNALS_HORN_IMAGE.x;
   int16_t y = SIGNALS_HORN_IMAGE.y;
 
