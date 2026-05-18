@@ -3,6 +3,7 @@
 #include <Preferences.h>
 
 #include "aa_timer_font.h"
+#include "horn_icon.h"
 
 // M5Stack Tough + Unit 2Relay on Port A.
 // Port A pins on Tough are G32/G33. Unit 2Relay uses both signal lines.
@@ -501,18 +502,18 @@ void useTimeFont() {
   ui.setTextSize(2);
 }
 
-uint32_t blendBlackOver(uint32_t bg, uint8_t alpha4) {
+uint32_t blendColorOver(uint32_t bg, uint32_t fg, uint8_t alpha4) {
   if (alpha4 == 0) {
     return bg;
   }
   if (alpha4 >= 15) {
-    return COLOR_TEXT_DARK;
+    return fg;
   }
 
   uint8_t keep = 15 - alpha4;
-  uint8_t r = ((bg >> 16) & 0xFF) * keep / 15;
-  uint8_t g = ((bg >> 8) & 0xFF) * keep / 15;
-  uint8_t b = (bg & 0xFF) * keep / 15;
+  uint8_t r = (((fg >> 16) & 0xFF) * alpha4 + ((bg >> 16) & 0xFF) * keep) / 15;
+  uint8_t g = (((fg >> 8) & 0xFF) * alpha4 + ((bg >> 8) & 0xFF) * keep) / 15;
+  uint8_t b = ((fg & 0xFF) * alpha4 + (bg & 0xFF) * keep) / 15;
   return RGB(r, g, b);
 }
 
@@ -527,7 +528,7 @@ void drawAATimerGlyph(const AATimerGlyph *glyph, int16_t x, int16_t y) {
       uint8_t packed = pgm_read_byte(glyph->data + pixel_index / 2);
       uint8_t alpha4 = (pixel_index & 1) == 0 ? packed >> 4 : packed & 0x0F;
       if (alpha4 != 0) {
-        ui.drawPixel(x + col, y + row, blendBlackOver(COLOR_PANEL, alpha4));
+        ui.drawPixel(x + col, y + row, blendColorOver(COLOR_PANEL, COLOR_TEXT_DARK, alpha4));
       }
     }
   }
@@ -724,26 +725,19 @@ uint32_t signalOffButtonColor() {
 
 void drawHornImage(bool active) {
   uint32_t color = active ? COLOR_TEXT_DARK : COLOR_HORN_IDLE;
-  uint32_t bg = COLOR_PANEL;
-  int16_t x = SIGNALS_HORN_IMAGE.x;
-  int16_t y = SIGNALS_HORN_IMAGE.y;
+  int16_t x = SIGNALS_HORN_IMAGE.x + (SIGNALS_HORN_IMAGE.w - HORN_ICON_WIDTH) / 2;
+  int16_t y = SIGNALS_HORN_IMAGE.y + (SIGNALS_HORN_IMAGE.h - HORN_ICON_HEIGHT) / 2;
+  uint16_t pixel_index = 0;
 
-  ui.fillRoundRect(x + 12, y + 54, 16, 48, 5, color);
-  ui.fillRoundRect(x + 25, y + 64, 18, 28, 4, color);
-  ui.fillRect(x + 38, y + 70, 12, 16, color);
-  ui.fillTriangle(x + 48, y + 58, x + 84, y + 34, x + 84, y + 112, color);
-  ui.fillTriangle(x + 48, y + 86, x + 84, y + 34, x + 84, y + 112, color);
-  ui.fillRoundRect(x + 78, y + 30, 14, 86, 6, color);
-  ui.fillRoundRect(x + 83, y + 40, 5, 66, 3, bg);
-  ui.fillCircle(x + 20, y + 66, 3, bg);
-  ui.fillCircle(x + 20, y + 90, 3, bg);
-  ui.drawLine(x + 93, y + 52, x + 102, y + 44, color);
-  ui.drawLine(x + 95, y + 73, x + 105, y + 73, color);
-  ui.drawLine(x + 93, y + 94, x + 102, y + 102, color);
-  ui.drawRect(x + 11, y + 53, 18, 50, COLOR_TEXT_DARK);
-  ui.drawLine(x + 48, y + 58, x + 84, y + 34, COLOR_TEXT_DARK);
-  ui.drawLine(x + 48, y + 86, x + 84, y + 112, COLOR_TEXT_DARK);
-  ui.drawRoundRect(x + 78, y + 30, 14, 86, 6, COLOR_TEXT_DARK);
+  for (uint8_t row = 0; row < HORN_ICON_HEIGHT; row++) {
+    for (uint8_t col = 0; col < HORN_ICON_WIDTH; col++, pixel_index++) {
+      uint8_t packed = pgm_read_byte(HORN_ICON_ALPHA4 + pixel_index / 2);
+      uint8_t alpha4 = (pixel_index & 1) == 0 ? packed >> 4 : packed & 0x0F;
+      if (alpha4 != 0) {
+        ui.drawPixel(x + col, y + row, blendColorOver(COLOR_PANEL, color, alpha4));
+      }
+    }
+  }
 }
 
 void drawSignalAutoButton(const Rect &r, const char *label, bool selected) {
