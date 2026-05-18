@@ -65,8 +65,10 @@ static const uint32_t COLOR_TEXT_DARK = COLOR_BG;
 static const uint32_t COLOR_TEXT_MUTED = RGB(110, 110, 110);
 static const uint32_t COLOR_HORN_IDLE = RGB(132, 132, 132);
 static const uint32_t COLOR_LINE = RGB(64, 64, 64);
-static const uint32_t COLOR_RED = RGB(255, 0, 0);
-static const uint32_t COLOR_AMBER = RGB(255, 165, 0);
+static const uint32_t COLOR_TEAL = RGB(47, 143, 138);
+static const uint32_t COLOR_TEAL_DARK = RGB(23, 108, 104);
+static const uint32_t COLOR_RED = RGB(179, 38, 45);
+static const uint32_t COLOR_AMBER = RGB(217, 154, 36);
 
 struct Config {
   uint8_t interval_min;
@@ -614,9 +616,9 @@ void drawBottomButton(const Rect &r, const char *label, bool left_round, bool ri
 }
 
 void drawPageDots(bool timer_active) {
-  ui.fillCircle(145, 18, 4, timer_active ? COLOR_TEXT : COLOR_LINE);
+  ui.fillCircle(145, 18, 4, timer_active ? COLOR_TEAL : COLOR_LINE);
   ui.drawCircle(145, 18, 4, COLOR_LINE);
-  ui.fillCircle(161, 18, 4, timer_active ? COLOR_LINE : COLOR_TEXT);
+  ui.fillCircle(161, 18, 4, timer_active ? COLOR_LINE : COLOR_TEAL);
   ui.drawCircle(161, 18, 4, COLOR_LINE);
 }
 
@@ -629,6 +631,20 @@ void drawModeHeader(const char *title, bool timer_active) {
   ui.setTextDatum(top_left);
   drawPageDots(timer_active);
   drawButton(HEADER_GEAR, "Config", COLOR_BUTTON_DIM, COLOR_TEXT, COLOR_LINE);
+}
+
+uint32_t timerStateColor() {
+  switch (state) {
+    case STATE_ARMED:
+      return COLOR_TEAL_DARK;
+    case STATE_WARNING:
+      return COLOR_AMBER;
+    case STATE_ALARM:
+      return COLOR_RED;
+    case STATE_DISARMED:
+    default:
+      return COLOR_TEXT_MUTED;
+  }
 }
 
 void drawSettingsHeader(const char *title) {
@@ -653,7 +669,7 @@ void drawTimerScreen(unsigned long now) {
   ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
   ui.setTextDatum(top_center);
   useMediumFont();
-  ui.setTextColor(COLOR_TEXT_DARK, COLOR_PANEL);
+  ui.setTextColor(timerStateColor(), COLOR_PANEL);
   ui.drawString(state == STATE_ALARM ? "ALARM" : state == STATE_WARNING ? "WARNING" : state == STATE_ARMED ? "ARMED" : "DISARMED", 160, 46);
   if (state == STATE_ALARM) {
     useTimeFont();
@@ -716,15 +732,15 @@ void drawSignalSettingsScreen() {
 }
 
 uint32_t signalButtonColor(uint8_t pattern) {
-  return fog_auto_enabled && config.fog_pattern == pattern ? COLOR_AMBER : COLOR_BUTTON;
+  return fog_auto_enabled && config.fog_pattern == pattern ? COLOR_TEAL_DARK : COLOR_BUTTON;
 }
 
 uint32_t signalOffButtonColor() {
-  return fog_auto_enabled ? COLOR_BUTTON : COLOR_AMBER;
+  return fog_auto_enabled ? COLOR_BUTTON : COLOR_TEAL_DARK;
 }
 
 void drawHornImage(bool active) {
-  uint32_t color = active ? COLOR_TEXT_DARK : COLOR_HORN_IDLE;
+  uint32_t color = active ? COLOR_TEAL_DARK : COLOR_HORN_IDLE;
   int16_t x = SIGNALS_HORN_IMAGE.x + (SIGNALS_HORN_IMAGE.w - HORN_ICON_WIDTH) / 2;
   int16_t y = SIGNALS_HORN_IMAGE.y + (SIGNALS_HORN_IMAGE.h - HORN_ICON_HEIGHT) / 2;
   uint16_t pixel_index = 0;
@@ -747,8 +763,8 @@ void drawSignalAutoButton(const Rect &r, const char *label, bool selected) {
   ui.fillRect(r.x, r.y, r.w, r.h, fill);
   ui.drawRect(r.x, r.y, r.w, r.h, COLOR_TEXT_DARK);
   if (selected) {
-    ui.drawRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, COLOR_TEXT_DARK);
-    ui.fillRect(r.x + 5, r.y + 5, 9, 9, COLOR_TEXT_DARK);
+    ui.drawRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, COLOR_TEAL_DARK);
+    ui.fillRect(r.x + 5, r.y + 5, 9, 9, COLOR_TEAL_DARK);
   }
   ui.setTextColor(text, fill);
   ui.setTextDatum(middle_center);
@@ -773,7 +789,7 @@ void drawOutputIcon(const Rect &r, const char *label, bool active, uint32_t acti
 
 void drawOutputIndicators() {
   drawOutputIcon(OUTPUT_ALARM_ICON, "A", alarm_relay_on, COLOR_RED);
-  drawOutputIcon(OUTPUT_HORN_ICON, "H", fog_relay_on, COLOR_AMBER);
+  drawOutputIcon(OUTPUT_HORN_ICON, "H", fog_relay_on, COLOR_TEAL);
 }
 
 void drawSignalsScreen(unsigned long now) {
