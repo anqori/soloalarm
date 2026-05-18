@@ -2,6 +2,8 @@
 #include <M5Unified.h>
 #include <Preferences.h>
 
+#include "aa_timer_font.h"
+
 // M5Stack Tough + Unit 2Relay on Port A.
 // Port A pins on Tough are G32/G33. Unit 2Relay uses both signal lines.
 static const uint8_t FOG_RELAY_PIN = 32;    // Unit 2Relay CH2: fog horn
@@ -501,6 +503,60 @@ void useTimeFont() {
   ui.setTextSize(2);
 }
 
+uint16_t blendBlackOver(uint16_t bg, uint8_t alpha4) {
+  if (alpha4 == 0) {
+    return bg;
+  }
+  if (alpha4 >= 15) {
+    return COLOR_TEXT_DARK;
+  }
+
+  uint8_t keep = 15 - alpha4;
+  uint8_t r = ((bg >> 11) & 0x1F) * keep / 15;
+  uint8_t g = ((bg >> 5) & 0x3F) * keep / 15;
+  uint8_t b = (bg & 0x1F) * keep / 15;
+  return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+void drawAATimerGlyph(const AATimerGlyph *glyph, int16_t x, int16_t y) {
+  if (glyph == nullptr) {
+    return;
+  }
+
+  uint16_t pixel_index = 0;
+  for (uint8_t row = 0; row < glyph->height; row++) {
+    for (uint8_t col = 0; col < glyph->width; col++, pixel_index++) {
+      uint8_t packed = pgm_read_byte(glyph->data + pixel_index / 2);
+      uint8_t alpha4 = (pixel_index & 1) == 0 ? packed >> 4 : packed & 0x0F;
+      if (alpha4 != 0) {
+        ui.drawPixel(x + col, y + row, blendBlackOver(COLOR_PANEL, alpha4));
+      }
+    }
+  }
+}
+
+int16_t aaTimerTextWidth(const char *text) {
+  int16_t width = 0;
+  while (*text != '\0') {
+    const AATimerGlyph *glyph = aaTimerGlyph(*text++);
+    if (glyph != nullptr) {
+      width += glyph->advance;
+    }
+  }
+  return width;
+}
+
+void drawAATimerTextCentered(const char *text, int16_t center_x, int16_t top_y) {
+  int16_t x = center_x - aaTimerTextWidth(text) / 2;
+  while (*text != '\0') {
+    const AATimerGlyph *glyph = aaTimerGlyph(*text++);
+    if (glyph != nullptr) {
+      drawAATimerGlyph(glyph, x, top_y);
+      x += glyph->advance;
+    }
+  }
+}
+
 void drawButton(const Rect &r, const char *label, uint32_t fill, uint32_t text, uint32_t outline = COLOR_LINE) {
   useSmallFont();
   uint32_t body = fill == COLOR_BUTTON ? COLOR_BUTTON_MID : fill;
@@ -600,8 +656,12 @@ void drawTimerScreen(unsigned long now) {
   useMediumFont();
   ui.setTextColor(COLOR_TEXT_DARK, COLOR_PANEL);
   ui.drawString(state == STATE_ALARM ? "ALARM" : state == STATE_WARNING ? "WARNING" : state == STATE_ARMED ? "ARMED" : "DISARMED", 160, 46);
-  useTimeFont();
-  ui.drawString(state == STATE_ALARM ? "TIME UP" : time_buf, 160, 78);
+  if (state == STATE_ALARM) {
+    useTimeFont();
+    ui.drawString("TIME UP", 160, 78);
+  } else {
+    drawAATimerTextCentered(time_buf, 160, 74);
+  }
   useSmallFont();
   ui.setTextColor(COLOR_TEXT_MUTED, COLOR_PANEL);
   ui.drawString(String("Warn ") + config.warn_sec + "s", 160, 160);
