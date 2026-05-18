@@ -149,8 +149,6 @@ static const Rect HEADER_GEAR = {252, 4, 64, 28};
 static const Rect HEADER_DONE = {246, 4, 70, 28};
 
 static const Rect TIMER_PRIMARY_FULL = {0, 190, 320, 50};
-static const Rect TIMER_PRIMARY = {0, 190, 160, 50};
-static const Rect TIMER_SECONDARY = {160, 190, 160, 50};
 
 static const Rect SETTINGS_INTERVAL_MINUS = {18, 84, 54, 42};
 static const Rect SETTINGS_INTERVAL_PLUS = {226, 84, 54, 42};
@@ -669,12 +667,8 @@ void drawTimerScreen(unsigned long now) {
 
   if (state == STATE_DISARMED) {
     drawBottomButton(TIMER_PRIMARY_FULL, "Hold to Arm", true, true);
-  } else if (state == STATE_ALARM) {
-    drawBottomButton(TIMER_PRIMARY, "Ack", true, false);
-    drawBottomButton(TIMER_SECONDARY, "Hold Disarm", false, true);
   } else {
-    drawBottomButton(TIMER_PRIMARY, "Reset", true, false);
-    drawBottomButton(TIMER_SECONDARY, "Hold Disarm", false, true);
+    drawBottomButton(TIMER_PRIMARY_FULL, "Hold Disarm", true, true);
   }
 }
 
@@ -949,14 +943,6 @@ void handleTap(int16_t x, int16_t y, unsigned long now) {
       switchScreen(SCREEN_TIMER_SETTINGS);
       return;
     }
-    if (state == STATE_ALARM && rectContains(TIMER_PRIMARY, x, y)) {
-      enterArmed(now);
-      return;
-    }
-    if ((state == STATE_ARMED || state == STATE_WARNING) && rectContains(TIMER_PRIMARY, x, y)) {
-      resetCountdown(now);
-      return;
-    }
   }
 
   if (screen == SCREEN_SIGNALS) {
@@ -1021,11 +1007,12 @@ void handleTouch(unsigned long now) {
     int16_t y = touch.y;
     touch_started_on_hold_control = false;
 
-    if (state == STATE_WARNING) {
+    bool timer_bottom_pressed = screen == SCREEN_TIMER && rectContains(TIMER_PRIMARY_FULL, x, y);
+    if (state == STATE_WARNING && !timer_bottom_pressed) {
       resetCountdown(now);
       return;
     }
-    if (state == STATE_ALARM) {
+    if (state == STATE_ALARM && !timer_bottom_pressed) {
       enterArmed(now);
       return;
     }
@@ -1036,7 +1023,7 @@ void handleTouch(unsigned long now) {
         startHold(HOLD_ARM, now);
         return;
       }
-      if (rectContains(TIMER_SECONDARY, x, y) && state != STATE_DISARMED) {
+      if (state != STATE_DISARMED && rectContains(TIMER_PRIMARY_FULL, x, y)) {
         touch_started_on_hold_control = true;
         startHold(HOLD_DISARM, now);
         return;
@@ -1093,7 +1080,7 @@ void handleTouch(unsigned long now) {
     if (hold_action == HOLD_ARM) {
       still_inside = rectContains(TIMER_PRIMARY_FULL, touch.x, touch.y);
     } else if (hold_action == HOLD_DISARM) {
-      still_inside = rectContains(TIMER_SECONDARY, touch.x, touch.y);
+      still_inside = rectContains(TIMER_PRIMARY_FULL, touch.x, touch.y);
     } else if (hold_action == HOLD_SIGNAL_OFF) {
       still_inside = rectContains(SIGNALS_OFF, touch.x, touch.y);
     } else if (hold_action == HOLD_SIGNAL_SAILING) {
