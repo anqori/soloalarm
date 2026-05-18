@@ -147,7 +147,7 @@ unsigned long last_ui_ms = 0;
 bool force_redraw = true;
 
 static const Rect HEADER_GEAR = {252, 4, 64, 28};
-static const Rect HEADER_DONE = {246, 4, 70, 28};
+static const Rect HEADER_DONE = {252, 4, 64, 28};
 
 static const Rect TIMER_PRIMARY_FULL = {0, 190, 320, 50};
 
@@ -635,10 +635,10 @@ void drawSettingsHeader(const char *title) {
   ui.fillRect(0, 0, 320, 36, COLOR_BG);
   ui.setTextColor(COLOR_TEXT, COLOR_BG);
   ui.setTextDatum(middle_left);
-  useMediumFont();
+  useHeaderFont();
   ui.drawString(title, 8, 18);
   ui.setTextDatum(top_left);
-  drawButton(HEADER_DONE, "Done", COLOR_BUTTON, COLOR_TEXT, COLOR_LINE);
+  drawButton(HEADER_DONE, "Done", COLOR_BUTTON_DIM, COLOR_TEXT, COLOR_LINE);
 }
 
 void drawTimerScreen(unsigned long now) {
