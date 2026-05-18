@@ -24,6 +24,7 @@ static const uint8_t DEFAULT_SIGNAL_INTERVAL_INDEX = 2;
 // Timing
 static const unsigned long UI_PERIOD_MS = 100;
 static const unsigned long HOLD_ACTION_MS = 1200;
+static const unsigned long HOLD_INDICATOR_DELAY_MS = 250;
 static const int16_t SWIPE_MIN_X_PX = 45;
 static const int16_t SWIPE_MAX_Y_PX = 90;
 
@@ -42,18 +43,27 @@ static const unsigned long FOG_PROLONGED_MS = 5000;
 static const unsigned long FOG_SHORT_MS = 1000;
 static const unsigned long FOG_GAP_MS = 2000;
 
-// Raymarine/LightHouse-inspired marine palette: high contrast, dark panels, red accents.
-static const uint16_t COLOR_BG = 0x0006;
-static const uint16_t COLOR_PANEL = 0x1084;
-static const uint16_t COLOR_BUTTON = 0x2945;
-static const uint16_t COLOR_BUTTON_DIM = 0x18C3;
-static const uint16_t COLOR_TEXT = 0xFFFF;
-static const uint16_t COLOR_TEXT_MUTED = 0x8C71;
-static const uint16_t COLOR_LINE = 0x4A69;
-static const uint16_t COLOR_RED = 0xE800;
-static const uint16_t COLOR_AMBER = 0xFD20;
-static const uint16_t COLOR_GREEN = 0x2589;
-static const uint16_t COLOR_CYAN = 0x04DF;
+#define RGB565(r, g, b) (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
+
+// i70-inspired instrument palette. Neutral colors are defined as RGB triples so
+// they are auditable; the panel white is deliberately warm to avoid a cyan cast
+// on the Tough LCD/backlight.
+static const uint16_t COLOR_BG = RGB565(0, 0, 0);
+static const uint16_t COLOR_WHITE = RGB565(255, 255, 255);
+static const uint16_t COLOR_PANEL = RGB565(255, 252, 244);
+static const uint16_t COLOR_BUTTON = RGB565(32, 32, 32);
+static const uint16_t COLOR_BUTTON_DIM = RGB565(16, 16, 16);
+static const uint16_t COLOR_BUTTON_HILITE = RGB565(80, 80, 80);
+static const uint16_t COLOR_BUTTON_MID = RGB565(40, 40, 40);
+static const uint16_t COLOR_BUTTON_SHADOW = RGB565(8, 8, 8);
+static const uint16_t COLOR_TEXT = COLOR_WHITE;
+static const uint16_t COLOR_TEXT_LIGHT = RGB565(190, 190, 190);
+static const uint16_t COLOR_TEXT_DARK = COLOR_BG;
+static const uint16_t COLOR_TEXT_MUTED = RGB565(110, 110, 110);
+static const uint16_t COLOR_HORN_IDLE = RGB565(132, 132, 132);
+static const uint16_t COLOR_LINE = RGB565(64, 64, 64);
+static const uint16_t COLOR_RED = RGB565(255, 0, 0);
+static const uint16_t COLOR_AMBER = RGB565(255, 165, 0);
 
 struct Config {
   uint8_t interval_min;
@@ -133,12 +143,12 @@ bool touch_started_on_hold_control = false;
 unsigned long last_ui_ms = 0;
 bool force_redraw = true;
 
-static const Rect HEADER_GEAR = {282, 4, 34, 28};
+static const Rect HEADER_GEAR = {252, 4, 64, 28};
 static const Rect HEADER_DONE = {246, 4, 70, 28};
 
-static const Rect TIMER_PRIMARY_FULL = {18, 150, 284, 64};
-static const Rect TIMER_PRIMARY = {18, 150, 134, 64};
-static const Rect TIMER_SECONDARY = {168, 150, 134, 64};
+static const Rect TIMER_PRIMARY_FULL = {0, 190, 320, 50};
+static const Rect TIMER_PRIMARY = {0, 190, 160, 50};
+static const Rect TIMER_SECONDARY = {160, 190, 160, 50};
 
 static const Rect SETTINGS_INTERVAL_MINUS = {18, 84, 54, 42};
 static const Rect SETTINGS_INTERVAL_PLUS = {226, 84, 54, 42};
@@ -148,13 +158,14 @@ static const Rect SETTINGS_SIGNAL_30 = {18, 128, 88, 54};
 static const Rect SETTINGS_SIGNAL_60 = {116, 128, 88, 54};
 static const Rect SETTINGS_SIGNAL_120 = {214, 128, 88, 54};
 
-static const Rect SIGNALS_MANUAL = {18, 48, 284, 54};
-static const Rect SIGNALS_OFF = {18, 142, 66, 54};
-static const Rect SIGNALS_SAILING = {92, 142, 66, 54};
-static const Rect SIGNALS_POWER = {166, 142, 66, 54};
-static const Rect SIGNALS_STOPPED = {240, 142, 66, 54};
-static const Rect OUTPUT_ALARM_ICON = {264, 218, 22, 18};
-static const Rect OUTPUT_HORN_ICON = {292, 218, 22, 18};
+static const Rect SIGNALS_MANUAL = {0, 190, 320, 50};
+static const Rect SIGNALS_HORN_IMAGE = {0, 36, 106, 154};
+static const Rect SIGNALS_OFF = {116, 46, 88, 60};
+static const Rect SIGNALS_SAILING = {216, 46, 88, 60};
+static const Rect SIGNALS_POWER = {116, 120, 88, 60};
+static const Rect SIGNALS_STOPPED = {216, 120, 88, 60};
+static const Rect OUTPUT_ALARM_ICON = {200, 8, 22, 18};
+static const Rect OUTPUT_HORN_ICON = {226, 8, 22, 18};
 
 uint8_t clampU8(uint8_t value, uint8_t min_value, uint8_t max_value) {
   if (value < min_value) {
@@ -465,13 +476,85 @@ bool rectContains(const Rect &r, int16_t x, int16_t y) {
   return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
 
-void drawButton(const Rect &r, const char *label, uint32_t fill, uint32_t text, uint32_t outline = COLOR_LINE) {
+void useSmallFont() {
+  ui.setFont(&fonts::Font2);
   ui.setTextSize(1);
-  ui.fillRect(r.x, r.y, r.w, r.h, fill);
-  ui.drawRect(r.x, r.y, r.w, r.h, outline);
-  ui.setTextColor(text, fill);
+}
+
+void useMediumFont() {
+  ui.setFont(&fonts::Font4);
+  ui.setTextSize(1);
+}
+
+void useHeaderFont() {
+  ui.setFont(&fonts::Font2);
+  ui.setTextSize(1);
+}
+
+void useLargeNumberFont() {
+  ui.setFont(&fonts::Font7);
+  ui.setTextSize(1);
+}
+
+void useTimeFont() {
+  ui.setFont(&fonts::Font4);
+  ui.setTextSize(2);
+}
+
+void drawButton(const Rect &r, const char *label, uint32_t fill, uint32_t text, uint32_t outline = COLOR_LINE) {
+  useSmallFont();
+  uint32_t body = fill == COLOR_BUTTON ? COLOR_BUTTON_MID : fill;
+  uint32_t top = fill == COLOR_BUTTON ? COLOR_BUTTON_HILITE : fill;
+  uint32_t lower = fill == COLOR_BUTTON ? COLOR_BUTTON : fill;
+  uint32_t shadow = fill == COLOR_BUTTON ? COLOR_BUTTON_SHADOW : COLOR_BG;
+
+  ui.fillRoundRect(r.x, r.y, r.w, r.h, 9, shadow);
+  ui.fillRoundRect(r.x + 2, r.y + 1, r.w - 4, r.h - 3, 8, body);
+  ui.fillRoundRect(r.x + 3, r.y + 2, r.w - 6, 12, 6, top);
+  ui.fillRect(r.x + 3, r.y + r.h / 2, r.w - 6, r.h / 2 - 4, lower);
+  ui.drawRoundRect(r.x, r.y, r.w, r.h, 9, outline);
+  ui.drawFastHLine(r.x + 8, r.y + 2, r.w - 16, COLOR_TEXT_MUTED);
+  ui.drawFastHLine(r.x + 8, r.y + r.h - 3, r.w - 16, COLOR_BG);
+  ui.drawFastVLine(r.x + 1, r.y + 8, r.h - 16, COLOR_LINE);
+  ui.drawFastVLine(r.x + r.w - 2, r.y + 8, r.h - 16, COLOR_BG);
+  ui.setTextColor(text);
   ui.setTextDatum(middle_center);
   ui.drawString(label, r.x + r.w / 2, r.y + r.h / 2);
+  ui.setTextDatum(top_left);
+}
+
+void drawBottomButton(const Rect &r, const char *label, bool left_round, bool right_round, uint32_t fill = COLOR_BUTTON) {
+  useSmallFont();
+  uint32_t body = fill == COLOR_BUTTON ? COLOR_BUTTON_MID : fill;
+  uint32_t top = fill == COLOR_BUTTON ? COLOR_TEXT_MUTED : COLOR_BUTTON_HILITE;
+  uint32_t lower = fill == COLOR_BUTTON ? COLOR_BUTTON_SHADOW : body;
+  int16_t radius = 15;
+
+  if (left_round && right_round) {
+    ui.fillRoundRect(r.x, r.y, r.w, r.h, radius, body);
+  } else if (left_round) {
+    ui.fillRoundRect(r.x, r.y, radius * 2, r.h, radius, body);
+    ui.fillRect(r.x + radius, r.y, r.w - radius, r.h, body);
+  } else if (right_round) {
+    ui.fillRoundRect(r.x + r.w - radius * 2, r.y, radius * 2, r.h, radius, body);
+    ui.fillRect(r.x, r.y, r.w - radius, r.h, body);
+  } else {
+    ui.fillRect(r.x, r.y, r.w, r.h, body);
+  }
+
+  int16_t inset_left = left_round ? radius : 0;
+  int16_t inset_right = right_round ? radius : 0;
+  ui.drawFastHLine(r.x + inset_left, r.y + 2, r.w - inset_left - inset_right, top);
+  ui.drawFastHLine(r.x + inset_left, r.y + r.h - 2, r.w - inset_left - inset_right, lower);
+  if (!left_round) {
+    ui.drawFastVLine(r.x, r.y + 3, r.h - 6, COLOR_BG);
+  }
+  if (!right_round) {
+    ui.drawFastVLine(r.x + r.w - 1, r.y + 3, r.h - 6, COLOR_BG);
+  }
+  ui.setTextColor(COLOR_TEXT);
+  ui.setTextDatum(middle_center);
+  ui.drawString(label, r.x + r.w / 2, r.y + r.h / 2 + 2);
   ui.setTextDatum(top_left);
 }
 
@@ -483,68 +566,55 @@ void drawPageDots(bool timer_active) {
 }
 
 void drawModeHeader(const char *title, bool timer_active) {
-  ui.fillRect(0, 0, 320, 36, COLOR_PANEL);
-  ui.fillRect(0, 34, 320, 2, COLOR_RED);
-  ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
+  ui.fillRect(0, 0, 320, 36, COLOR_BG);
+  ui.setTextColor(COLOR_TEXT, COLOR_BG);
   ui.setTextDatum(middle_left);
-  ui.setTextSize(2);
+  useHeaderFont();
   ui.drawString(title, 8, 18);
   ui.setTextDatum(top_left);
   drawPageDots(timer_active);
-  drawButton(HEADER_GEAR, "*", COLOR_BUTTON_DIM, COLOR_TEXT, COLOR_RED);
+  drawButton(HEADER_GEAR, "Config", COLOR_BUTTON_DIM, COLOR_TEXT, COLOR_LINE);
 }
 
 void drawSettingsHeader(const char *title) {
-  ui.fillRect(0, 0, 320, 36, COLOR_PANEL);
-  ui.fillRect(0, 34, 320, 2, COLOR_RED);
-  ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
+  ui.fillRect(0, 0, 320, 36, COLOR_BG);
+  ui.setTextColor(COLOR_TEXT, COLOR_BG);
   ui.setTextDatum(middle_left);
-  ui.setTextSize(2);
+  useMediumFont();
   ui.drawString(title, 8, 18);
   ui.setTextDatum(top_left);
-  drawButton(HEADER_DONE, "Done", COLOR_BUTTON, COLOR_TEXT, COLOR_RED);
-}
-
-void drawSwipeCue(bool show_left, bool show_right) {
-  ui.setTextColor(COLOR_LINE, COLOR_BG);
-  ui.setTextDatum(middle_center);
-  ui.setTextSize(2);
-  if (show_left) {
-    ui.drawString("<", 8, 118);
-  }
-  if (show_right) {
-    ui.drawString(">", 312, 118);
-  }
-  ui.setTextDatum(top_left);
+  drawButton(HEADER_DONE, "Done", COLOR_BUTTON, COLOR_TEXT, COLOR_LINE);
 }
 
 void drawTimerScreen(unsigned long now) {
   drawModeHeader("Timer", true);
-  drawSwipeCue(false, true);
 
   char time_buf[8] = {0};
   formatTime(state == STATE_DISARMED ? (unsigned long)config.interval_min * 60UL * 1000UL : remaining_ms, time_buf, sizeof(time_buf));
 
-  ui.fillRect(28, 44, 264, 92, COLOR_PANEL);
-  ui.drawRect(28, 44, 264, 92, COLOR_LINE);
+  ui.fillRect(0, 36, 320, 154, COLOR_PANEL);
+  ui.drawFastHLine(0, 36, 320, COLOR_LINE);
+  ui.drawFastHLine(0, 189, 320, COLOR_LINE);
   ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
   ui.setTextDatum(top_center);
-  ui.setTextSize(2);
+  useMediumFont();
+  ui.setTextColor(COLOR_TEXT_DARK, COLOR_PANEL);
   ui.drawString(state == STATE_ALARM ? "ALARM" : state == STATE_WARNING ? "WARNING" : state == STATE_ARMED ? "ARMED" : "DISARMED", 160, 46);
-  ui.setTextSize(5);
+  useTimeFont();
   ui.drawString(state == STATE_ALARM ? "TIME UP" : time_buf, 160, 78);
-  ui.setTextSize(1);
-  ui.drawString(String("Warn ") + config.warn_sec + "s", 160, 132);
+  useSmallFont();
+  ui.setTextColor(COLOR_TEXT_MUTED, COLOR_PANEL);
+  ui.drawString(String("Warn ") + config.warn_sec + "s", 160, 160);
   ui.setTextDatum(top_left);
 
   if (state == STATE_DISARMED) {
-    drawButton(TIMER_PRIMARY_FULL, "Hold to Arm", COLOR_GREEN, COLOR_TEXT, COLOR_LINE);
+    drawBottomButton(TIMER_PRIMARY_FULL, "Hold to Arm", true, true);
   } else if (state == STATE_ALARM) {
-    drawButton(TIMER_PRIMARY, "Ack", COLOR_RED, COLOR_TEXT);
-    drawButton(TIMER_SECONDARY, "Hold Disarm", COLOR_BUTTON, COLOR_TEXT);
+    drawBottomButton(TIMER_PRIMARY, "Ack", true, false);
+    drawBottomButton(TIMER_SECONDARY, "Hold Disarm", false, true);
   } else {
-    drawButton(TIMER_PRIMARY, "Reset", COLOR_CYAN, COLOR_TEXT);
-    drawButton(TIMER_SECONDARY, "Hold Disarm", COLOR_BUTTON, COLOR_TEXT);
+    drawBottomButton(TIMER_PRIMARY, "Reset", true, false);
+    drawBottomButton(TIMER_SECONDARY, "Hold Disarm", false, true);
   }
 }
 
@@ -553,14 +623,14 @@ void drawTimerSettingsScreen() {
 
   ui.setTextColor(COLOR_TEXT, COLOR_BG);
   ui.setTextDatum(top_center);
-  ui.setTextSize(2);
+  useMediumFont();
   ui.drawString("Interval", 150, 78);
-  ui.setTextSize(3);
+  useMediumFont();
   ui.drawString(String(config.interval_min) + " min", 150, 104);
 
-  ui.setTextSize(2);
+  useMediumFont();
   ui.drawString("Warning", 150, 150);
-  ui.setTextSize(3);
+  useMediumFont();
   ui.drawString(String(config.warn_sec) + " sec", 150, 176);
   ui.setTextDatum(top_left);
 
@@ -579,9 +649,9 @@ void drawSignalSettingsScreen() {
 
   ui.setTextColor(COLOR_TEXT, COLOR_BG);
   ui.setTextDatum(top_center);
-  ui.setTextSize(2);
+  useMediumFont();
   ui.drawString("Underway interval", 160, 90);
-  ui.setTextSize(1);
+  useSmallFont();
   ui.drawString("Sailing + Power", 160, 114);
   ui.setTextDatum(top_left);
 
@@ -598,14 +668,55 @@ uint32_t signalOffButtonColor() {
   return fog_auto_enabled ? COLOR_BUTTON : COLOR_AMBER;
 }
 
+void drawHornImage(bool active) {
+  uint16_t color = active ? COLOR_TEXT_DARK : COLOR_HORN_IDLE;
+  uint16_t bg = COLOR_PANEL;
+  int16_t x = SIGNALS_HORN_IMAGE.x;
+  int16_t y = SIGNALS_HORN_IMAGE.y;
+
+  ui.fillRoundRect(x + 12, y + 54, 16, 48, 5, color);
+  ui.fillRoundRect(x + 25, y + 64, 18, 28, 4, color);
+  ui.fillRect(x + 38, y + 70, 12, 16, color);
+  ui.fillTriangle(x + 48, y + 58, x + 84, y + 34, x + 84, y + 112, color);
+  ui.fillTriangle(x + 48, y + 86, x + 84, y + 34, x + 84, y + 112, color);
+  ui.fillRoundRect(x + 78, y + 30, 14, 86, 6, color);
+  ui.fillRoundRect(x + 83, y + 40, 5, 66, 3, bg);
+  ui.fillCircle(x + 20, y + 66, 3, bg);
+  ui.fillCircle(x + 20, y + 90, 3, bg);
+  ui.drawLine(x + 93, y + 52, x + 102, y + 44, color);
+  ui.drawLine(x + 95, y + 73, x + 105, y + 73, color);
+  ui.drawLine(x + 93, y + 94, x + 102, y + 102, color);
+  ui.drawRect(x + 11, y + 53, 18, 50, COLOR_TEXT_DARK);
+  ui.drawLine(x + 48, y + 58, x + 84, y + 34, COLOR_TEXT_DARK);
+  ui.drawLine(x + 48, y + 86, x + 84, y + 112, COLOR_TEXT_DARK);
+  ui.drawRoundRect(x + 78, y + 30, 14, 86, 6, COLOR_TEXT_DARK);
+}
+
+void drawSignalAutoButton(const Rect &r, const char *label, bool selected) {
+  uint32_t fill = COLOR_PANEL;
+  uint32_t text = COLOR_TEXT_DARK;
+
+  ui.fillRect(r.x, r.y, r.w, r.h, fill);
+  ui.drawRect(r.x, r.y, r.w, r.h, COLOR_TEXT_DARK);
+  if (selected) {
+    ui.drawRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, COLOR_TEXT_DARK);
+    ui.fillRect(r.x + 5, r.y + 5, 9, 9, COLOR_TEXT_DARK);
+  }
+  ui.setTextColor(text, fill);
+  ui.setTextDatum(middle_center);
+  useSmallFont();
+  ui.drawString(label, r.x + r.w / 2, r.y + r.h / 2);
+  ui.setTextDatum(top_left);
+}
+
 void drawOutputIcon(const Rect &r, const char *label, bool active, uint32_t active_color) {
-  uint32_t fill = active ? active_color : COLOR_BG;
+  uint32_t fill = active ? active_color : COLOR_BUTTON_DIM;
   uint32_t outline = active ? COLOR_TEXT : COLOR_LINE;
-  uint32_t text = active ? COLOR_BG : COLOR_TEXT_MUTED;
+  uint32_t text = active ? COLOR_TEXT_DARK : COLOR_TEXT_MUTED;
 
   ui.fillRect(r.x, r.y, r.w, r.h, fill);
   ui.drawRect(r.x, r.y, r.w, r.h, outline);
-  ui.setTextSize(1);
+  useSmallFont();
   ui.setTextColor(text, fill);
   ui.setTextDatum(middle_center);
   ui.drawString(label, r.x + r.w / 2, r.y + r.h / 2);
@@ -619,28 +730,18 @@ void drawOutputIndicators() {
 
 void drawSignalsScreen(unsigned long now) {
   drawModeHeader("Signals", false);
-  drawSwipeCue(true, false);
 
-  ui.fillRect(28, 104, 264, 28, COLOR_PANEL);
-  ui.drawRect(28, 104, 264, 28, COLOR_LINE);
-  ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
-  ui.setTextDatum(top_center);
-  ui.setTextSize(2);
-  ui.drawString("Fog / Auto", 160, 112);
-  ui.setTextSize(1);
-  if (fog_auto_enabled && !fog_group_active) {
-    unsigned long until = fog_next_ms > now ? (fog_next_ms - now + 999UL) / 1000UL : 0;
-    ui.drawString(String("Next in ") + until + "s", 160, 210);
-  } else if (fog_group_active) {
-    ui.drawString(fog_relay_on ? "Horn sounding" : "Signal gap", 160, 210);
-  }
-  ui.setTextDatum(top_left);
+  (void)now;
+  ui.fillRect(0, 36, 320, 154, COLOR_PANEL);
+  ui.drawFastHLine(0, 36, 320, COLOR_TEXT_DARK);
+  drawHornImage(fog_relay_on);
+  drawSignalAutoButton(SIGNALS_OFF, "Auto Off", !fog_auto_enabled);
+  drawSignalAutoButton(SIGNALS_SAILING, "Sailing", fog_auto_enabled && config.fog_pattern == FOG_SAILING);
+  drawSignalAutoButton(SIGNALS_POWER, "Powered", fog_auto_enabled && config.fog_pattern == FOG_POWER_MAKING_WAY);
+  drawSignalAutoButton(SIGNALS_STOPPED, "Stopped", fog_auto_enabled && config.fog_pattern == FOG_STOPPED);
+  ui.drawFastHLine(0, 189, 320, COLOR_TEXT_DARK);
 
-  drawButton(SIGNALS_MANUAL, fog_relay_on ? "Horn On" : "Horn", fog_relay_on ? COLOR_AMBER : COLOR_CYAN, COLOR_TEXT);
-  drawButton(SIGNALS_OFF, "Off", signalOffButtonColor(), COLOR_TEXT, !fog_auto_enabled ? COLOR_TEXT : COLOR_LINE);
-  drawButton(SIGNALS_SAILING, "Sailing", signalButtonColor(FOG_SAILING), COLOR_TEXT, config.fog_pattern == FOG_SAILING && fog_auto_enabled ? COLOR_TEXT : COLOR_LINE);
-  drawButton(SIGNALS_POWER, "Power", signalButtonColor(FOG_POWER_MAKING_WAY), COLOR_TEXT, config.fog_pattern == FOG_POWER_MAKING_WAY && fog_auto_enabled ? COLOR_TEXT : COLOR_LINE);
-  drawButton(SIGNALS_STOPPED, "Stopped", signalButtonColor(FOG_STOPPED), COLOR_TEXT, config.fog_pattern == FOG_STOPPED && fog_auto_enabled ? COLOR_TEXT : COLOR_LINE);
+  drawBottomButton(SIGNALS_MANUAL, fog_relay_on ? "Horn On" : "Horn", true, true, fog_relay_on ? COLOR_AMBER : COLOR_BUTTON);
 
 }
 
@@ -650,13 +751,17 @@ void drawHoldProgress(unsigned long now) {
   }
 
   unsigned long held_ms = now - hold_start_ms;
+  if (held_ms < HOLD_INDICATOR_DELAY_MS) {
+    return;
+  }
+
   uint16_t progress = held_ms >= HOLD_ACTION_MS ? 320 : (uint16_t)((held_ms * 320UL) / HOLD_ACTION_MS);
 
-  ui.fillRect(0, 0, 320, 34, COLOR_PANEL);
+  ui.fillRect(0, 0, 320, 34, COLOR_BUTTON_DIM);
   ui.fillRect(0, 0, progress, 34, COLOR_AMBER);
   ui.drawRect(0, 0, 320, 34, COLOR_TEXT);
-  ui.setTextSize(2);
-  ui.setTextColor(progress > 150 ? COLOR_BG : COLOR_TEXT, progress > 150 ? COLOR_AMBER : COLOR_PANEL);
+  useMediumFont();
+  ui.setTextColor(progress > 150 ? COLOR_TEXT_DARK : COLOR_TEXT, progress > 150 ? COLOR_AMBER : COLOR_BUTTON_DIM);
   ui.setTextDatum(middle_center);
   ui.drawString("HOLD", 160, 17);
   ui.setTextDatum(top_left);
