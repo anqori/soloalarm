@@ -105,6 +105,7 @@ Signals settings:
 Signals screen:
 
 - Touch and hold the horn image for 0.25s without moving to sound the horn manually.
+- Hold the stacked horn image to sound one five-short-blast warning pattern.
 - Under **Fog / Auto**, hold a mode button to start automatic fog signals.
 - Hold **Off** to stop automatic fog signals.
 - Hold progress is shown in the header as a full-width `HOLD` bar so it stays visible under your finger.
@@ -115,8 +116,10 @@ Signals screen:
   - `Power`: one prolonged blast every configured underway interval
   - `Stopped`: two prolonged blasts every 120s
 
-Fog controls remain available while the countdown alarm is active. The skipper
-is responsible for choosing the legally correct fog signal for the situation.
+The five-blast warning pattern overrides any automatic or manual horn output
+already in progress. Fog controls remain available while the countdown alarm is
+active. The skipper is responsible for choosing the legally correct fog signal
+for the situation.
 
 Output indicators:
 

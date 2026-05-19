@@ -47,6 +47,9 @@ static const unsigned long SIGNAL_INTERVAL_OPTIONS_MS[] = {30000, 60000, 120000}
 static const unsigned long FOG_PROLONGED_MS = 5000;
 static const unsigned long FOG_SHORT_MS = 1000;
 static const unsigned long FOG_GAP_MS = 2000;
+static const unsigned long WARNING_HORN_BLAST_MS = 300;
+static const unsigned long WARNING_HORN_GAP_MS = 150;
+static const uint8_t WARNING_HORN_BLAST_COUNT = 5;
 
 #define RGB(r, g, b) (uint32_t)(((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
 
@@ -100,7 +103,8 @@ enum HoldAction {
   HOLD_SIGNAL_OFF,
   HOLD_SIGNAL_SAILING,
   HOLD_SIGNAL_POWER,
-  HOLD_SIGNAL_STOPPED
+  HOLD_SIGNAL_STOPPED,
+  HOLD_WARNING_HORN
 };
 
 enum FogPattern {
@@ -141,6 +145,9 @@ bool fog_auto_enabled = false;
 bool fog_group_active = false;
 uint8_t fog_step = 0;
 unsigned long fog_next_ms = 0;
+bool warning_horn_active = false;
+uint8_t warning_horn_step = 0;
+unsigned long warning_horn_next_ms = 0;
 bool manual_horn_pending = false;
 bool manual_horn_armed = false;
 int16_t manual_horn_start_x = 0;
@@ -167,7 +174,8 @@ static const Rect SETTINGS_SIGNAL_60 = {116, 128, 88, 54};
 static const Rect SETTINGS_SIGNAL_120 = {214, 128, 88, 54};
 
 static const Rect SIGNALS_PANEL = {0, 36, 320, 204};
-static const Rect SIGNALS_HORN_IMAGE = {0, 36, 126, 204};
+static const Rect SIGNALS_HORN_IMAGE = {0, 52, 126, 64};
+static const Rect SIGNALS_WARNING_IMAGE = {0, 120, 126, 112};
 static const Rect SIGNALS_OFF = {136, 52, 80, 72};
 static const Rect SIGNALS_SAILING = {226, 52, 80, 72};
 static const Rect SIGNALS_POWER = {136, 140, 80, 72};
@@ -237,6 +245,7 @@ void stopAlarmOutput() {
 
 void stopFogOutput() {
   setFogRelay(false);
+  warning_horn_active = false;
   manual_horn_pending = false;
   manual_horn_armed = false;
   fog_group_active = false;
@@ -434,7 +443,50 @@ void startFogGroup(unsigned long now) {
   force_redraw = true;
 }
 
+void startWarningHorn(unsigned long now) {
+  warning_horn_active = true;
+  warning_horn_step = 0;
+  warning_horn_next_ms = now + WARNING_HORN_BLAST_MS;
+  fog_group_active = false;
+  setFogRelay(true);
+  force_redraw = true;
+}
+
+bool updateWarningHorn(unsigned long now) {
+  if (!warning_horn_active) {
+    return false;
+  }
+
+  bool current_blast = (warning_horn_step % 2) == 0;
+  if (fog_relay_on != current_blast) {
+    setFogRelay(current_blast);
+    force_redraw = true;
+  }
+
+  if (now < warning_horn_next_ms) {
+    return true;
+  }
+
+  warning_horn_step++;
+  if (warning_horn_step >= WARNING_HORN_BLAST_COUNT * 2 - 1) {
+    warning_horn_active = false;
+    setFogRelay(false);
+    force_redraw = true;
+    return false;
+  }
+
+  bool blast = (warning_horn_step % 2) == 0;
+  setFogRelay(blast);
+  warning_horn_next_ms = now + (blast ? WARNING_HORN_BLAST_MS : WARNING_HORN_GAP_MS);
+  force_redraw = true;
+  return true;
+}
+
 void updateFog(unsigned long now, bool touch_holding_manual) {
+  if (updateWarningHorn(now)) {
+    return;
+  }
+
   if (touch_holding_manual) {
     if (!fog_relay_on) {
       setFogRelay(true);
@@ -698,20 +750,64 @@ uint32_t signalOffButtonColor() {
   return fog_auto_enabled ? COLOR_BUTTON : COLOR_TEAL_DARK;
 }
 
-void drawHornImage(bool active) {
-  uint32_t color = active ? COLOR_TEAL_DARK : COLOR_HORN_IDLE;
-  int16_t x = SIGNALS_HORN_IMAGE.x + (SIGNALS_HORN_IMAGE.w - HORN_ICON_WIDTH) / 2;
-  int16_t y = SIGNALS_HORN_IMAGE.y + (SIGNALS_HORN_IMAGE.h - HORN_ICON_HEIGHT) / 2;
-  uint16_t pixel_index = 0;
+uint32_t lerpColor(uint32_t from, uint32_t to, uint8_t step, uint8_t max_step) {
+  if (max_step == 0) {
+    return to;
+  }
 
-  for (uint8_t row = 0; row < HORN_ICON_HEIGHT; row++) {
-    for (uint8_t col = 0; col < HORN_ICON_WIDTH; col++, pixel_index++) {
+  uint8_t r = ((from >> 16) & 0xFF) + ((((to >> 16) & 0xFF) - ((from >> 16) & 0xFF)) * step) / max_step;
+  uint8_t g = ((from >> 8) & 0xFF) + ((((to >> 8) & 0xFF) - ((from >> 8) & 0xFF)) * step) / max_step;
+  uint8_t b = (from & 0xFF) + (((to & 0xFF) - (from & 0xFF)) * step) / max_step;
+  return RGB(r, g, b);
+}
+
+void drawHornIconIntegerScale(int16_t x, int16_t y, uint8_t downsample, uint32_t color) {
+  if (downsample == 0) {
+    downsample = 1;
+  }
+
+  int16_t dst_w = HORN_ICON_WIDTH / downsample;
+  int16_t dst_h = HORN_ICON_HEIGHT / downsample;
+
+  for (int16_t row = 0; row < dst_h; row++) {
+    uint8_t src_row = row * downsample;
+    for (int16_t col = 0; col < dst_w; col++) {
+      uint8_t src_col = col * downsample;
+      uint16_t pixel_index = (uint16_t)src_row * HORN_ICON_WIDTH + src_col;
       uint8_t packed = pgm_read_byte(HORN_ICON_ALPHA4 + pixel_index / 2);
       uint8_t alpha4 = (pixel_index & 1) == 0 ? packed >> 4 : packed & 0x0F;
       if (alpha4 != 0) {
         ui.drawPixel(x + col, y + row, blendColorOver(COLOR_PANEL, color, alpha4));
       }
     }
+  }
+}
+
+void drawHornImage(bool active) {
+  uint32_t color = active ? COLOR_TEAL_DARK : COLOR_HORN_IDLE;
+  uint8_t downsample = 1;
+  int16_t w = HORN_ICON_WIDTH / downsample;
+  int16_t h = HORN_ICON_HEIGHT / downsample;
+  int16_t x = SIGNALS_HORN_IMAGE.x + (SIGNALS_HORN_IMAGE.w - w) / 2;
+  int16_t y = SIGNALS_HORN_IMAGE.y + (SIGNALS_HORN_IMAGE.h - h) / 2;
+  drawHornIconIntegerScale(x, y, downsample, color);
+}
+
+void drawWarningHornImage() {
+  static const uint8_t STACK_COUNT = 5;
+  uint8_t downsample = 1;
+  int16_t icon_w = HORN_ICON_WIDTH / downsample;
+  int16_t icon_h = HORN_ICON_HEIGHT / downsample;
+  int16_t offset_x = 12;
+  int16_t offset_y = 0;
+  int16_t stack_w = icon_w + offset_x * (STACK_COUNT - 1);
+  int16_t stack_h = icon_h + offset_y * (STACK_COUNT - 1);
+  int16_t x = SIGNALS_WARNING_IMAGE.x + (SIGNALS_WARNING_IMAGE.w - stack_w) / 2;
+  int16_t y = SIGNALS_POWER.y + (SIGNALS_POWER.h - stack_h) / 2;
+
+  for (int8_t i = STACK_COUNT - 1; i >= 0; i--) {
+    uint32_t color = lerpColor(COLOR_HORN_IDLE, RGB(232, 232, 232), i, STACK_COUNT - 1);
+    drawHornIconIntegerScale(x + offset_x * i, y + offset_y * i, downsample, color);
   }
 }
 
@@ -758,6 +854,7 @@ void drawSignalsScreen(unsigned long now) {
   ui.fillRect(SIGNALS_PANEL.x, SIGNALS_PANEL.y, SIGNALS_PANEL.w, SIGNALS_PANEL.h, COLOR_PANEL);
   ui.drawFastHLine(0, 36, 320, COLOR_TEXT_DARK);
   drawHornImage(fog_relay_on);
+  drawWarningHornImage();
   drawSignalAutoButton(SIGNALS_OFF, "Auto Off", !fog_auto_enabled);
   drawSignalAutoButton(SIGNALS_SAILING, "Sailing", fog_auto_enabled && config.fog_pattern == FOG_SAILING);
   drawSignalAutoButton(SIGNALS_POWER, "Powered", fog_auto_enabled && config.fog_pattern == FOG_POWER_MAKING_WAY);
@@ -897,6 +994,9 @@ void applyHoldAction(unsigned long now) {
     case HOLD_SIGNAL_STOPPED:
       selectFogPattern(FOG_STOPPED, now);
       break;
+    case HOLD_WARNING_HORN:
+      startWarningHorn(now);
+      break;
     case HOLD_NONE:
       break;
   }
@@ -1004,6 +1104,11 @@ void handleTouch(unsigned long now) {
     }
 
     if (screen == SCREEN_SIGNALS) {
+      if (rectContains(SIGNALS_WARNING_IMAGE, x, y)) {
+        touch_started_on_hold_control = true;
+        startHold(HOLD_WARNING_HORN, now);
+        return;
+      }
       if (rectContains(SIGNALS_OFF, x, y)) {
         touch_started_on_hold_control = true;
         startHold(HOLD_SIGNAL_OFF, now);
@@ -1052,6 +1157,8 @@ void handleTouch(unsigned long now) {
       still_inside = rectContains(SIGNALS_POWER, touch.x, touch.y);
     } else if (hold_action == HOLD_SIGNAL_STOPPED) {
       still_inside = rectContains(SIGNALS_STOPPED, touch.x, touch.y);
+    } else if (hold_action == HOLD_WARNING_HORN) {
+      still_inside = rectContains(SIGNALS_WARNING_IMAGE, touch.x, touch.y);
     }
 
     if (!still_inside) {
