@@ -435,11 +435,6 @@ void startFogGroup(unsigned long now) {
 }
 
 void updateFog(unsigned long now, bool touch_holding_manual) {
-  if (state == STATE_ALARM) {
-    stopFogOutput();
-    return;
-  }
-
   if (touch_holding_manual) {
     if (!fog_relay_on) {
       setFogRelay(true);
@@ -908,14 +903,16 @@ void applyHoldAction(unsigned long now) {
   hold_action = HOLD_NONE;
 }
 
+void acknowledgeTimerTouch(unsigned long now) {
+  if (state == STATE_ARMED || state == STATE_WARNING || state == STATE_ALARM) {
+    resetCountdown(now);
+  }
+}
+
 void handleTap(int16_t x, int16_t y, unsigned long now) {
   if (screen == SCREEN_TIMER) {
     if (rectContains(HEADER_GEAR, x, y)) {
       switchScreen(SCREEN_TIMER_SETTINGS);
-      return;
-    }
-    if (rectContains(TIMER_PANEL, x, y) && (state == STATE_ARMED || state == STATE_WARNING || state == STATE_ALARM)) {
-      resetCountdown(now);
       return;
     }
   }
@@ -981,6 +978,7 @@ void handleTouch(unsigned long now) {
     int16_t x = touch.x;
     int16_t y = touch.y;
     touch_started_on_hold_control = false;
+    acknowledgeTimerTouch(now);
 
     if (screen == SCREEN_TIMER) {
       if (state == STATE_DISARMED && rectContains(TIMER_PANEL, x, y)) {

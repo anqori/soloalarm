@@ -82,9 +82,8 @@ Timer screen:
 - Shows disarmed, armed, warning, or alarm state.
 - Shows interval or remaining time.
 - Hold the main white readout area to start the countdown.
-- **Reset** while armed/warning restarts the countdown.
-- **Ack** in alarm stops the siren and starts a new countdown.
-- During warning or alarm, tapping the main white readout area resets/restarts the countdown.
+- Any touch while armed/warning restarts the countdown.
+- Any touch in alarm stops the siren and starts a new countdown.
 - Hold the main white readout area to return to disarmed.
 
 Timer settings:
@@ -116,8 +115,8 @@ Signals screen:
   - `Power`: one prolonged blast every configured underway interval
   - `Stopped`: two prolonged blasts every 120s
 
-Automatic fog output pauses while the countdown alarm is active. The skipper is
-responsible for choosing the legally correct fog signal for the situation.
+Fog controls remain available while the countdown alarm is active. The skipper
+is responsible for choosing the legally correct fog signal for the situation.
 
 Output indicators:
 
