@@ -67,8 +67,7 @@ The Tough has no normal programmable front-panel app buttons. The firmware uses
 the touchscreen only.
 
 The visual style is inspired by Raymarine i70-style instruments: black face,
-white readout panes, large numeric readouts, and dark grey hard-key controls
-along the bottom edge.
+white readout panes, large numeric readouts, and restrained dark controls.
 
 The app has two operating modes: **Timer** and **Signals**. Switch between them
 by swiping horizontally:
@@ -82,11 +81,11 @@ Timer screen:
 
 - Shows disarmed, armed, warning, or alarm state.
 - Shows interval or remaining time.
-- Hold **Arm** to start the countdown.
+- Hold the main white readout area to start the countdown.
 - **Reset** while armed/warning restarts the countdown.
 - **Ack** in alarm stops the siren and starts a new countdown.
-- During warning or alarm, touching anywhere resets/restarts the countdown.
-- Hold **Disarm** to return to disarmed.
+- During warning or alarm, tapping the main white readout area resets/restarts the countdown.
+- Hold the main white readout area to return to disarmed.
 
 Timer settings:
 
@@ -106,7 +105,7 @@ Signals settings:
 
 Signals screen:
 
-- Hold **Horn** to sound the horn manually.
+- Touch and hold the horn image for 0.25s without moving to sound the horn manually.
 - Under **Fog / Auto**, hold a mode button to start automatic fog signals.
 - Hold **Off** to stop automatic fog signals.
 - Hold progress is shown in the header as a full-width `HOLD` bar so it stays visible under your finger.

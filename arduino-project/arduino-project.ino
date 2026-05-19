@@ -28,6 +28,8 @@ static const uint8_t DEFAULT_SIGNAL_INTERVAL_INDEX = 2;
 static const unsigned long UI_PERIOD_MS = 100;
 static const unsigned long HOLD_ACTION_MS = 1200;
 static const unsigned long HOLD_INDICATOR_DELAY_MS = 250;
+static const unsigned long MANUAL_HORN_STATIONARY_MS = 250;
+static const int16_t MANUAL_HORN_MOVE_CANCEL_PX = 8;
 static const int16_t SWIPE_MIN_X_PX = 45;
 static const int16_t SWIPE_MAX_Y_PX = 90;
 
@@ -139,7 +141,10 @@ bool fog_auto_enabled = false;
 bool fog_group_active = false;
 uint8_t fog_step = 0;
 unsigned long fog_next_ms = 0;
+bool manual_horn_pending = false;
 bool manual_horn_armed = false;
+int16_t manual_horn_start_x = 0;
+int16_t manual_horn_start_y = 0;
 
 HoldAction hold_action = HOLD_NONE;
 unsigned long hold_start_ms = 0;
@@ -151,7 +156,7 @@ bool force_redraw = true;
 static const Rect HEADER_GEAR = {252, 4, 64, 28};
 static const Rect HEADER_DONE = {252, 4, 64, 28};
 
-static const Rect TIMER_PRIMARY_FULL = {0, 190, 320, 50};
+static const Rect TIMER_PANEL = {0, 36, 320, 204};
 
 static const Rect SETTINGS_INTERVAL_MINUS = {18, 84, 54, 42};
 static const Rect SETTINGS_INTERVAL_PLUS = {226, 84, 54, 42};
@@ -161,12 +166,12 @@ static const Rect SETTINGS_SIGNAL_30 = {18, 128, 88, 54};
 static const Rect SETTINGS_SIGNAL_60 = {116, 128, 88, 54};
 static const Rect SETTINGS_SIGNAL_120 = {214, 128, 88, 54};
 
-static const Rect SIGNALS_MANUAL = {0, 190, 320, 50};
-static const Rect SIGNALS_HORN_IMAGE = {0, 36, 106, 154};
-static const Rect SIGNALS_OFF = {116, 46, 88, 60};
-static const Rect SIGNALS_SAILING = {216, 46, 88, 60};
-static const Rect SIGNALS_POWER = {116, 120, 88, 60};
-static const Rect SIGNALS_STOPPED = {216, 120, 88, 60};
+static const Rect SIGNALS_PANEL = {0, 36, 320, 204};
+static const Rect SIGNALS_HORN_IMAGE = {0, 36, 126, 204};
+static const Rect SIGNALS_OFF = {136, 52, 80, 72};
+static const Rect SIGNALS_SAILING = {226, 52, 80, 72};
+static const Rect SIGNALS_POWER = {136, 140, 80, 72};
+static const Rect SIGNALS_STOPPED = {226, 140, 80, 72};
 static const Rect OUTPUT_ALARM_ICON = {200, 8, 22, 18};
 static const Rect OUTPUT_HORN_ICON = {226, 8, 22, 18};
 
@@ -232,6 +237,7 @@ void stopAlarmOutput() {
 
 void stopFogOutput() {
   setFogRelay(false);
+  manual_horn_pending = false;
   manual_horn_armed = false;
   fog_group_active = false;
   fog_step = 0;
@@ -580,41 +586,6 @@ void drawButton(const Rect &r, const char *label, uint32_t fill, uint32_t text, 
   ui.setTextDatum(top_left);
 }
 
-void drawBottomButton(const Rect &r, const char *label, bool left_round, bool right_round, uint32_t fill = COLOR_BUTTON) {
-  useSmallFont();
-  uint32_t body = fill == COLOR_BUTTON ? COLOR_BUTTON_MID : fill;
-  uint32_t top = fill == COLOR_BUTTON ? COLOR_TEXT_MUTED : COLOR_BUTTON_HILITE;
-  uint32_t lower = fill == COLOR_BUTTON ? COLOR_BUTTON_SHADOW : body;
-  int16_t radius = 15;
-
-  if (left_round && right_round) {
-    ui.fillRoundRect(r.x, r.y, r.w, r.h, radius, body);
-  } else if (left_round) {
-    ui.fillRoundRect(r.x, r.y, radius * 2, r.h, radius, body);
-    ui.fillRect(r.x + radius, r.y, r.w - radius, r.h, body);
-  } else if (right_round) {
-    ui.fillRoundRect(r.x + r.w - radius * 2, r.y, radius * 2, r.h, radius, body);
-    ui.fillRect(r.x, r.y, r.w - radius, r.h, body);
-  } else {
-    ui.fillRect(r.x, r.y, r.w, r.h, body);
-  }
-
-  int16_t inset_left = left_round ? radius : 0;
-  int16_t inset_right = right_round ? radius : 0;
-  ui.drawFastHLine(r.x + inset_left, r.y + 2, r.w - inset_left - inset_right, top);
-  ui.drawFastHLine(r.x + inset_left, r.y + r.h - 2, r.w - inset_left - inset_right, lower);
-  if (!left_round) {
-    ui.drawFastVLine(r.x, r.y + 3, r.h - 6, COLOR_BG);
-  }
-  if (!right_round) {
-    ui.drawFastVLine(r.x + r.w - 1, r.y + 3, r.h - 6, COLOR_BG);
-  }
-  ui.setTextColor(COLOR_TEXT);
-  ui.setTextDatum(middle_center);
-  ui.drawString(label, r.x + r.w / 2, r.y + r.h / 2 + 2);
-  ui.setTextDatum(top_left);
-}
-
 void drawPageDots(bool timer_active) {
   ui.fillCircle(145, 18, 4, timer_active ? COLOR_TEAL : COLOR_LINE);
   ui.drawCircle(145, 18, 4, COLOR_LINE);
@@ -663,30 +634,23 @@ void drawTimerScreen(unsigned long now) {
   char time_buf[8] = {0};
   formatTime(state == STATE_DISARMED ? (unsigned long)config.interval_min * 60UL * 1000UL : remaining_ms, time_buf, sizeof(time_buf));
 
-  ui.fillRect(0, 36, 320, 154, COLOR_PANEL);
+  ui.fillRect(TIMER_PANEL.x, TIMER_PANEL.y, TIMER_PANEL.w, TIMER_PANEL.h, COLOR_PANEL);
   ui.drawFastHLine(0, 36, 320, COLOR_LINE);
-  ui.drawFastHLine(0, 189, 320, COLOR_LINE);
   ui.setTextColor(COLOR_TEXT, COLOR_PANEL);
   ui.setTextDatum(top_center);
   useMediumFont();
   ui.setTextColor(timerStateColor(), COLOR_PANEL);
-  ui.drawString(state == STATE_ALARM ? "ALARM" : state == STATE_WARNING ? "WARNING" : state == STATE_ARMED ? "ARMED" : "DISARMED", 160, 46);
+  ui.drawString(state == STATE_ALARM ? "ALARM" : state == STATE_WARNING ? "WARNING" : state == STATE_ARMED ? "ARMED" : "DISARMED", 160, 56);
   if (state == STATE_ALARM) {
     useTimeFont();
-    ui.drawString("TIME UP", 160, 78);
+    ui.drawString("TIME UP", 160, 100);
   } else {
-    drawAATimerTextCentered(time_buf, 160, 74);
+    drawAATimerTextCentered(time_buf, 160, 98);
   }
-  useSmallFont();
+  useMediumFont();
   ui.setTextColor(COLOR_TEXT_MUTED, COLOR_PANEL);
-  ui.drawString(String("Warn ") + config.warn_sec + "s", 160, 160);
+  ui.drawString(state == STATE_DISARMED ? "Hold to Arm" : "Hold to Disarm", 160, 190);
   ui.setTextDatum(top_left);
-
-  if (state == STATE_DISARMED) {
-    drawBottomButton(TIMER_PRIMARY_FULL, "Hold to Arm", true, true);
-  } else {
-    drawBottomButton(TIMER_PRIMARY_FULL, "Hold Disarm", true, true);
-  }
 }
 
 void drawTimerSettingsScreen() {
@@ -796,17 +760,13 @@ void drawSignalsScreen(unsigned long now) {
   drawModeHeader("Signals", false);
 
   (void)now;
-  ui.fillRect(0, 36, 320, 154, COLOR_PANEL);
+  ui.fillRect(SIGNALS_PANEL.x, SIGNALS_PANEL.y, SIGNALS_PANEL.w, SIGNALS_PANEL.h, COLOR_PANEL);
   ui.drawFastHLine(0, 36, 320, COLOR_TEXT_DARK);
   drawHornImage(fog_relay_on);
   drawSignalAutoButton(SIGNALS_OFF, "Auto Off", !fog_auto_enabled);
   drawSignalAutoButton(SIGNALS_SAILING, "Sailing", fog_auto_enabled && config.fog_pattern == FOG_SAILING);
   drawSignalAutoButton(SIGNALS_POWER, "Powered", fog_auto_enabled && config.fog_pattern == FOG_POWER_MAKING_WAY);
   drawSignalAutoButton(SIGNALS_STOPPED, "Stopped", fog_auto_enabled && config.fog_pattern == FOG_STOPPED);
-  ui.drawFastHLine(0, 189, 320, COLOR_TEXT_DARK);
-
-  drawBottomButton(SIGNALS_MANUAL, fog_relay_on ? "Horn On" : "Horn", true, true);
-
 }
 
 void drawHoldProgress(unsigned long now) {
@@ -867,8 +827,9 @@ void startHold(HoldAction action, unsigned long now) {
 }
 
 void clearHold() {
-  if (hold_action != HOLD_NONE || manual_horn_armed) {
+  if (hold_action != HOLD_NONE || manual_horn_pending || manual_horn_armed) {
     hold_action = HOLD_NONE;
+    manual_horn_pending = false;
     manual_horn_armed = false;
     force_redraw = true;
   }
@@ -953,6 +914,10 @@ void handleTap(int16_t x, int16_t y, unsigned long now) {
       switchScreen(SCREEN_TIMER_SETTINGS);
       return;
     }
+    if (rectContains(TIMER_PANEL, x, y) && (state == STATE_ARMED || state == STATE_WARNING || state == STATE_ALARM)) {
+      resetCountdown(now);
+      return;
+    }
   }
 
   if (screen == SCREEN_SIGNALS) {
@@ -1018,29 +983,25 @@ void handleTouch(unsigned long now) {
     touch_started_on_hold_control = false;
 
     if (screen == SCREEN_TIMER) {
-      if (state == STATE_DISARMED && rectContains(TIMER_PRIMARY_FULL, x, y)) {
+      if (state == STATE_DISARMED && rectContains(TIMER_PANEL, x, y)) {
         touch_started_on_hold_control = true;
         startHold(HOLD_ARM, now);
         return;
       }
-      if (state != STATE_DISARMED && rectContains(TIMER_PRIMARY_FULL, x, y)) {
+      if (state != STATE_DISARMED && rectContains(TIMER_PANEL, x, y)) {
         touch_started_on_hold_control = true;
         startHold(HOLD_DISARM, now);
         return;
       }
-      if (state == STATE_ARMED || state == STATE_WARNING || state == STATE_ALARM) {
-        resetCountdown(now);
-        return;
-      }
     }
 
-    if (screen == SCREEN_SIGNALS && rectContains(SIGNALS_MANUAL, x, y)) {
+    if (screen == SCREEN_SIGNALS && rectContains(SIGNALS_HORN_IMAGE, x, y)) {
       touch_started_on_hold_control = true;
-      manual_horn_armed = true;
+      manual_horn_pending = true;
+      manual_horn_armed = false;
       hold_start_ms = now;
-      setFogRelay(true);
-      fog_group_active = false;
-      force_redraw = true;
+      manual_horn_start_x = x;
+      manual_horn_start_y = y;
       return;
     }
 
@@ -1082,9 +1043,9 @@ void handleTouch(unsigned long now) {
   if (hold_action != HOLD_NONE && touch.isPressed()) {
     bool still_inside = false;
     if (hold_action == HOLD_ARM) {
-      still_inside = rectContains(TIMER_PRIMARY_FULL, touch.x, touch.y);
+      still_inside = rectContains(TIMER_PANEL, touch.x, touch.y);
     } else if (hold_action == HOLD_DISARM) {
-      still_inside = rectContains(TIMER_PRIMARY_FULL, touch.x, touch.y);
+      still_inside = rectContains(TIMER_PANEL, touch.x, touch.y);
     } else if (hold_action == HOLD_SIGNAL_OFF) {
       still_inside = rectContains(SIGNALS_OFF, touch.x, touch.y);
     } else if (hold_action == HOLD_SIGNAL_SAILING) {
@@ -1104,10 +1065,20 @@ void handleTouch(unsigned long now) {
     }
   }
 
-  if (manual_horn_armed && touch.isPressed()) {
-    if (!rectContains(SIGNALS_MANUAL, touch.x, touch.y)) {
-      manual_horn_armed = false;
-      setFogRelay(false);
+  if (manual_horn_pending && touch.isPressed()) {
+    bool moved = abs(touch.x - manual_horn_start_x) > MANUAL_HORN_MOVE_CANCEL_PX ||
+                 abs(touch.y - manual_horn_start_y) > MANUAL_HORN_MOVE_CANCEL_PX;
+    if (!rectContains(SIGNALS_HORN_IMAGE, touch.x, touch.y) || moved) {
+      manual_horn_pending = false;
+      if (manual_horn_armed) {
+        manual_horn_armed = false;
+        setFogRelay(false);
+        force_redraw = true;
+      }
+    } else if (!manual_horn_armed && now - hold_start_ms >= MANUAL_HORN_STATIONARY_MS) {
+      manual_horn_armed = true;
+      setFogRelay(true);
+      fog_group_active = false;
       force_redraw = true;
     }
   }
