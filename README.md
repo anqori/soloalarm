@@ -165,5 +165,3 @@ make monitor PORT=/dev/ttyUSB0
 - The code uses M5Unified/M5GFX for display, touch, and speaker support.
 - Relay outputs default to active-high. If your relay board is active-low, set
   `RELAY_ACTIVE_LOW = true` in `arduino-project/arduino-project.ino`.
-- The old CAD enclosure files are for the previous Arduino Uno prototype and
-  are not needed for the Tough + junction box build.
