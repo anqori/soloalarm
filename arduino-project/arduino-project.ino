@@ -919,10 +919,15 @@ void startHold(HoldAction action, unsigned long now) {
 }
 
 void clearHold() {
+  bool stop_manual_horn = manual_horn_armed;
+
   if (hold_action != HOLD_NONE || manual_horn_pending || manual_horn_armed) {
     hold_action = HOLD_NONE;
     manual_horn_pending = false;
     manual_horn_armed = false;
+    if (stop_manual_horn) {
+      setFogRelay(false);
+    }
     force_redraw = true;
   }
 }
