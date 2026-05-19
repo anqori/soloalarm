@@ -66,9 +66,6 @@ the horn power.
 The Tough has no normal programmable front-panel app buttons. The firmware uses
 the touchscreen only.
 
-The visual style is inspired by Raymarine i70-style instruments: black face,
-white readout panes, large numeric readouts, and restrained dark controls.
-
 The app has two operating modes: **Timer** and **Signals**. Switch between them
 by swiping horizontally:
 
